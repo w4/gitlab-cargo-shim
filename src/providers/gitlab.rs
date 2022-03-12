@@ -183,52 +183,32 @@ impl super::PackageProvider for Gitlab {
                         .json()
                         .await?;
 
-                    Ok::<_, anyhow::Error>(Some(
+                    let expected_file_name = format!("{}-{}.crate", release.name, release.version);
+
+                    Ok::<_, anyhow::Error>(
                         package_files
                             .into_iter()
-                            .filter_map(|package_file| {
-                                #[allow(clippy::case_sensitive_file_extension_comparisons)]
-                                if package_file.file_name.ends_with(".crate") {
-                                    if package_file.file_name
-                                        == format!("{}-{}.crate", release.name, release.version)
-                                    {
-                                        Some((
-                                            package_path.clone(),
-                                            Release {
-                                                name: release.name.clone(),
-                                                version: release.version.clone(),
-                                                checksum: package_file.file_sha256,
-                                            },
-                                        ))
-                                    } else {
-                                        tracing::info!(
-                                            "{}/{}/{}/{} should be called {}-{}.crate",
-                                            project,
-                                            release.name,
-                                            release.version,
-                                            package_file.file_name,
-                                            release.name,
-                                            release.version
-                                        );
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect(),
-                    ))
+                            .find(|package_file| package_file.file_name == expected_file_name)
+                            .map(move |package_file| {
+                                (
+                                    package_path.clone(),
+                                    Release {
+                                        name: release.name,
+                                        version: release.version,
+                                        checksum: package_file.file_sha256,
+                                    },
+                                )
+                            }),
+                    )
                 }));
             }
         }
 
-        let x: Vec<Vec<_>> = futures
+        futures
             .err_into()
             .filter_map(|v| async move { v.and_then(|v| v).transpose() })
             .try_collect()
-            .await?;
-
-        Ok(x.into_iter().flatten().collect())
+            .await
     }
 
     async fn fetch_metadata_for_release(
@@ -263,7 +243,7 @@ async fn handle_error(resp: reqwest::Response) -> Result<reqwest::Response, anyh
         Err(anyhow::Error::msg(
             resp.message
                 .or(resp.error)
-                .map_or_else(|| Cow::Borrowed("unknown error"), Cow::Owned)
+                .map_or_else(|| Cow::Borrowed("unknown error"), Cow::Owned),
         ))
     }
 }
