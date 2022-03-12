@@ -1,4 +1,4 @@
-use cargo_metadata::{Package};
+use cargo_metadata::Package;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

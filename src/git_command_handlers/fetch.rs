@@ -32,10 +32,6 @@ pub fn handle<U: UserProvider + PackageProvider + Send + Sync + 'static>(
     // magic header
     handle.write(PktLine::Data(b"packfile\n"))?;
 
-    // send a welcome message
-    // handle.write(PktLine::SidebandMsg(b"Hello from gitlab-cargo-shim!\n"))?;
-    // handle.flush(session, channel);
-
     // send the complete packfile
     let packfile = PackFile::new(packfile_entries);
     handle.write(PktLine::SidebandData(packfile))?;

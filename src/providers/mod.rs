@@ -21,9 +21,11 @@ pub trait PackageProvider {
     /// figure out the path of a package.
     type CratePath: std::fmt::Debug + Send + std::hash::Hash + Clone + Eq + PartialEq + Send + Sync;
 
+    async fn fetch_group(self: Arc<Self>, group: &str, do_as: &User) -> anyhow::Result<Group>;
+
     async fn fetch_releases_for_group(
         self: Arc<Self>,
-        group: &str,
+        group: &Group,
         do_as: &User,
     ) -> anyhow::Result<Vec<(Self::CratePath, Release)>>;
 
@@ -33,13 +35,19 @@ pub trait PackageProvider {
         version: &str,
     ) -> anyhow::Result<cargo_metadata::Metadata>;
 
-    fn cargo_dl_uri(&self, group: &str, token: &str) -> String;
+    fn cargo_dl_uri(&self, group: &Group, token: &str) -> String;
 }
 
 #[derive(Debug, Clone)]
 pub struct User {
     pub id: u64,
     pub username: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Group {
+    pub id: u64,
+    pub name: String,
 }
 
 #[derive(Debug)]

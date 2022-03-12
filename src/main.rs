@@ -27,6 +27,7 @@ use thrussh::{
 use thrussh_keys::key::PublicKey;
 use tokio_util::{codec::Decoder, codec::Encoder as CodecEncoder};
 use tracing::error;
+use crate::providers::Group;
 
 const AGENT: &str = concat!(
     "agent=",
@@ -94,7 +95,7 @@ pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
     codec: GitCodec,
     gitlab: Arc<U>,
     user: Option<User>,
-    group: Option<String>,
+    group: Option<Group>,
     // fetcher_future: Option<JoinHandle<anyhow::Result<Vec<Release>>>>,
     input_bytes: BytesMut,
     output_bytes: BytesMut,
@@ -108,8 +109,8 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         self.user.as_ref().ok_or(anyhow::anyhow!("no user set"))
     }
 
-    fn group(&self) -> anyhow::Result<&str> {
-        self.group.as_deref().ok_or(anyhow::anyhow!("no group set"))
+    fn group(&self) -> anyhow::Result<&Group> {
+        self.group.as_ref().ok_or(anyhow::anyhow!("no group set"))
     }
 
     fn write(&mut self, packet: PktLine<'_>) -> Result<(), anyhow::Error> {
@@ -125,9 +126,9 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
     async fn fetch_releases_by_crate(
         &self,
-        group: &str,
     ) -> anyhow::Result<HashMap<(U::CratePath, String), Vec<Release>>> {
         let user = self.user()?;
+        let group = self.group()?;
 
         let mut res = HashMap::new();
 
@@ -208,7 +209,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         packfile.insert(vec![], "config.json".to_string(), config_json)?;
 
         // fetch the releases for every project within the given group
-        let releases_by_crate = self.fetch_releases_by_crate(group).await?;
+        let releases_by_crate = self.fetch_releases_by_crate().await?;
 
         let mut buffer = BytesMut::new();
 
@@ -414,11 +415,24 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
             // parse the requested group from the given path (the argument
             // given to `git-upload-pack`)
             if let Some(group) = args.next().filter(|v| v.as_str() != "/") {
+                let user = self.user()?;
                 let group = group
                     .trim_start_matches('/')
-                    .trim_end_matches('/')
-                    .to_string();
-                self.group = Some(group);
+                    .trim_end_matches('/');
+
+                match self.gitlab.clone().fetch_group(group, user).await {
+                    Ok(v) => self.group = Some(v),
+                    Err(e) => {
+                        session.extended_data(channel, 1, CryptoVec::from_slice(format!(indoc::indoc! {"
+                            \r\nGitLab returned an error when attempting to query for group `{}` as `{}`:
+
+                                {}
+
+                            The group might not exist or you may not have permission to view it.\r\n
+                        "}, group, user.username, e).as_bytes()));
+                        session.close(channel);
+                    }
+                }
             } else {
                 session.extended_data(channel, 1, CryptoVec::from_slice(indoc::indoc! {b"
                     \r\nNo group was given in the path part of the SSH URI. A GitLab group should be defined in your .cargo/config.toml as follows:

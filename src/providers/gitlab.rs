@@ -1,9 +1,10 @@
-use crate::providers::{Release, User};
+use crate::providers::{Group, Release, User};
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 const GITLAB_API_ENDPOINT: &str = "http://127.0.0.1:3000";
@@ -43,14 +44,16 @@ impl super::UserProvider for Gitlab {
         };
 
         if username == "gitlab-ci-token" {
-            let res: GitlabJobResponse = self
-                .client
-                .get(format!("{}/job", self.base_url))
-                .header("JOB-TOKEN", password)
-                .send()
-                .await?
-                .json()
-                .await?;
+            let res: GitlabJobResponse = handle_error(
+                self.client
+                    .get(format!("{}/job", self.base_url))
+                    .header("JOB-TOKEN", password)
+                    .send()
+                    .await?,
+            )
+            .await?
+            .json()
+            .await?;
 
             Ok(Some(User {
                 id: res.user.id,
@@ -103,15 +106,32 @@ impl super::UserProvider for Gitlab {
 impl super::PackageProvider for Gitlab {
     type CratePath = Arc<GitlabCratePath>;
 
+    async fn fetch_group(self: Arc<Self>, group: &str, do_as: &User) -> anyhow::Result<Group> {
+        let uri = format!(
+            "{}/groups/{}?sudo={}",
+            self.base_url,
+            utf8_percent_encode(group, NON_ALPHANUMERIC),
+            do_as.id
+        );
+
+        let req = handle_error(self.client.get(uri).send().await?)
+            .await?
+            .json::<GitlabGroupResponse>()
+            .await?
+            .into();
+
+        Ok(req)
+    }
+
     async fn fetch_releases_for_group(
         self: Arc<Self>,
-        group: &str,
+        group: &Group,
         do_as: &User,
     ) -> anyhow::Result<Vec<(Self::CratePath, Release)>> {
         let mut next_uri = Some(format!(
             "{}/groups/{}/packages?per_page=100&pagination=keyset&sort=asc&sudo={}",
             self.base_url,
-            utf8_percent_encode(group, NON_ALPHANUMERIC),
+            utf8_percent_encode(&group.name, NON_ALPHANUMERIC),
             do_as.id
         ));
 
@@ -223,11 +243,47 @@ impl super::PackageProvider for Gitlab {
         Ok(self.client.get(uri).send().await?.json().await?)
     }
 
-    fn cargo_dl_uri(&self, group: &str, token: &str) -> String {
+    fn cargo_dl_uri(&self, group: &Group, token: &str) -> String {
         format!(
-            "{}/groups/{group}/packages/generic/{{sha256-checksum}}/{{crate}}-{{version}}.crate?private_token={token}",
-            self.base_url
+            "{}/groups/{}/packages/generic/{{sha256-checksum}}/{{crate}}-{{version}}.crate?private_token={token}",
+            self.base_url,
+            group.id,
         )
+    }
+}
+
+async fn handle_error(resp: reqwest::Response) -> Result<reqwest::Response, anyhow::Error> {
+    if resp.status().is_success() {
+        Ok(resp)
+    } else {
+        let resp: GitlabErrorResponse = resp.json().await?;
+        Err(anyhow::Error::msg(
+            resp.message
+                .or(resp.error)
+                .map(Cow::Owned)
+                .unwrap_or_else(|| Cow::Borrowed("unknown error")),
+        ))
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GitlabErrorResponse {
+    message: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct GitlabGroupResponse {
+    id: u64,
+    name: String,
+}
+
+impl From<GitlabGroupResponse> for Group {
+    fn from(v: GitlabGroupResponse) -> Self {
+        Self {
+            id: v.id,
+            name: v.name,
+        }
     }
 }
 
