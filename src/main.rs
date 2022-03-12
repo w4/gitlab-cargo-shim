@@ -81,14 +81,14 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
     fn new(&mut self, _peer_addr: Option<SocketAddr>) -> Self::Handler {
         Handler {
             codec: GitCodec::default(),
-            gitlab: self.gitlab.clone(),
+            gitlab: Arc::clone(&self.gitlab),
             user: None,
             group: None,
             // fetcher_future: None,
             input_bytes: BytesMut::new(),
             output_bytes: BytesMut::new(),
             is_git_protocol_v2: false,
-            metadata_cache: self.metadata_cache.clone(),
+            metadata_cache: Arc::clone(&self.metadata_cache),
             packfile_cache: None,
         }
     }
@@ -104,7 +104,9 @@ pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
     output_bytes: BytesMut,
     is_git_protocol_v2: bool,
     metadata_cache: MetadataCache,
-    packfile_cache: Option<(HashOutput, Vec<PackFileEntry>)>,
+    // Cache of the packfile generated for this user in case it's requested
+    // more than once
+    packfile_cache: Option<Arc<(HashOutput, Vec<PackFileEntry>)>>,
 }
 
 impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
@@ -135,9 +137,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
         let mut res = HashMap::new();
 
-        for (path, release) in self
-            .gitlab
-            .clone()
+        for (path, release) in Arc::clone(&self.gitlab)
             .fetch_releases_for_group(group, user)
             .await?
         {
@@ -165,13 +165,11 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         {
             let reader = self.metadata_cache.read();
             if let Some(cache) = reader.get(&key) {
-                return Ok(cache.clone());
+                return Ok(Arc::clone(cache));
             }
         }
 
-        let metadata = self
-            .gitlab
-            .clone()
+        let metadata = Arc::clone(&self.gitlab)
             .fetch_metadata_for_release(path, crate_version)
             .await?;
 
@@ -184,15 +182,14 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
         {
             let mut writer = self.metadata_cache.write();
-            writer.insert(key.into_owned(), metadata.clone());
+            writer.insert(key.into_owned(), Arc::clone(&metadata));
         }
 
         Ok(metadata)
     }
 
-    async fn build_packfile(&mut self) -> anyhow::Result<(HashOutput, Vec<PackFileEntry>)> {
+    async fn build_packfile(&mut self) -> anyhow::Result<Arc<(HashOutput, Vec<PackFileEntry>)>> {
         if let Some(packfile_cache) = &self.packfile_cache {
-            // TODO
             return Ok(packfile_cache.clone());
         }
 
@@ -238,13 +235,13 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             )?;
         }
 
-        let packfile = packfile.commit(
+        let packfile = Arc::new(packfile.commit(
             "test".to_string(),
             "test@test.com".to_string(),
             "test".to_string(),
-        )?;
+        )?);
 
-        self.packfile_cache = Some(packfile.clone());
+        self.packfile_cache = Some(Arc::clone(&packfile));
 
         Ok(packfile)
     }
@@ -305,7 +302,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
 
         Box::pin(async move {
             // start building the packfile we're going to send to the user
-            let (commit_hash, packfile_entries) = self.build_packfile().await?;
+            let (commit_hash, packfile_entries) = &*self.build_packfile().await?;
 
             while let Some(frame) = self.codec.decode(&mut self.input_bytes)? {
                 // if the client flushed without giving us a command, we're expected to close
@@ -324,7 +321,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
                             &mut session,
                             channel,
                             &frame.metadata,
-                            &commit_hash,
+                            commit_hash,
                         )?;
                     }
                     b"command=fetch" => {
@@ -333,7 +330,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
                             &mut session,
                             channel,
                             &frame.metadata,
-                            &packfile_entries,
+                            packfile_entries,
                         )?;
                     }
                     v => {
@@ -421,7 +418,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
                 let user = self.user()?;
                 let group = group.trim_start_matches('/').trim_end_matches('/');
 
-                match self.gitlab.clone().fetch_group(group, user).await {
+                match Arc::clone(&self.gitlab).fetch_group(group, user).await {
                     Ok(v) => self.group = Some(v),
                     Err(e) => {
                         session.extended_data(channel, 1, CryptoVec::from_slice(format!(indoc::indoc! {"

@@ -191,7 +191,7 @@ impl super::PackageProvider for Gitlab {
                             .find(|package_file| package_file.file_name == expected_file_name)
                             .map(move |package_file| {
                                 (
-                                    package_path.clone(),
+                                    Arc::clone(&package_path),
                                     Release {
                                         name: release.name,
                                         version: release.version,
