@@ -1,26 +1,28 @@
 #![deny(clippy::pedantic)]
 #![allow(clippy::missing_errors_doc)]
 
+pub mod config;
 pub mod git_command_handlers;
 pub mod metadata;
 pub mod protocol;
 pub mod providers;
 pub mod util;
 
-use crate::metadata::CargoIndexCrateMetadata;
-use crate::protocol::low_level::{HashOutput, PackFileEntry};
-use crate::providers::Group;
-use crate::util::get_crate_folder;
 use crate::{
+    config::Args,
+    metadata::CargoIndexCrateMetadata,
     protocol::{
         codec::{Encoder, GitCodec},
         high_level::GitRepository,
+        low_level::{HashOutput, PackFileEntry},
         packet_line::PktLine,
     },
-    providers::{gitlab::Gitlab, PackageProvider, Release, User, UserProvider},
+    providers::{gitlab::Gitlab, Group, PackageProvider, Release, User, UserProvider},
+    util::get_crate_folder,
 };
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes, BytesMut};
+use clap::Parser;
 use futures::Future;
 use parking_lot::RwLock;
 use std::{borrow::Cow, collections::HashMap, fmt::Write, net::SocketAddr, pin::Pin, sync::Arc};
@@ -44,6 +46,8 @@ const AGENT: &str = concat!(
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
+    let args: Args = Args::parse();
+
     let ed25519_key = thrussh_keys::key::KeyPair::generate_ed25519().unwrap();
 
     let thrussh_config = Arc::new(thrussh::server::Config {
@@ -52,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
         ..thrussh::server::Config::default()
     });
 
-    let gitlab = Arc::new(Gitlab::new()?);
+    let gitlab = Arc::new(Gitlab::new(&args.config.gitlab)?);
 
     thrussh::server::run(
         thrussh_config,

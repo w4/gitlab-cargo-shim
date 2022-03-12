@@ -1,5 +1,6 @@
 #![allow(clippy::module_name_repetitions)]
 
+use crate::config::GitlabConfig;
 use crate::providers::{Group, Release, User};
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
@@ -9,25 +10,24 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
-const GITLAB_API_ENDPOINT: &str = "http://127.0.0.1:3000";
-// const PAT: &str = "glpat-saSjc4srMhxAA-qDp8F8";
-const PAT: &str = "X994NFZjTy1ZYbsCwTLK";
-
 pub struct Gitlab {
     client: reqwest::Client,
     base_url: String,
 }
 
 impl Gitlab {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(config: &GitlabConfig) -> anyhow::Result<Self> {
         let mut headers = header::HeaderMap::new();
-        headers.insert("PRIVATE-TOKEN", header::HeaderValue::from_static(PAT));
+        headers.insert(
+            "PRIVATE-TOKEN",
+            header::HeaderValue::from_str(&config.admin_token)?,
+        );
 
         Ok(Self {
             client: reqwest::ClientBuilder::new()
                 .default_headers(headers)
                 .build()?,
-            base_url: format!("{}/api/v4", GITLAB_API_ENDPOINT),
+            base_url: format!("{}/api/v4", config.uri),
         })
     }
 }
@@ -216,12 +216,7 @@ impl super::PackageProvider for Gitlab {
         path: &Self::CratePath,
         version: &str,
     ) -> anyhow::Result<cargo_metadata::Metadata> {
-        let uri = format!(
-            "{}{}?private_token={}",
-            self.base_url,
-            path.metadata_uri(version),
-            PAT,
-        );
+        let uri = format!("{}{}", self.base_url, path.metadata_uri(version),);
 
         Ok(self.client.get(uri).send().await?.json().await?)
     }

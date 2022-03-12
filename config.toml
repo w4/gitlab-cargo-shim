@@ -1,0 +1,9 @@
+[gitlab]
+# the base url of the gitlab instance
+uri = "http://127.0.0.1:3000"
+
+# a personal access token of an admin with permission to `sudo` as other
+# users and create impersonation tokens. `sudo` is used to fetch all the
+# packages the user can access, and the impersonation token is returned
+# to the user to download packages
+admin-token = "personal-access-token"
