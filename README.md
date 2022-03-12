@@ -41,6 +41,25 @@ before_script:
 
 (or add the corresponding [environment variable][envvar])
 
+To release your package from CI, add a new pipeline step:
+
+```
+stage:
+  - release-crate
+
+release-crate:
+  stage: release-crate
+  before_script:
+    - cargo install cargo-get
+    - export CRATE_NAME=$(cargo get name) CRATE_VERSION=$(cargo get version)
+    - export CRATE_FILE=$(CRATE_NAME)-$(CRATE_FILE).crate
+  script:
+    - cargo package
+    - cargo metadata > metadata.json
+    - curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file target/package/${CRATE_FILE} "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${NAME}/${VERSION}/${CRATE_FILE}"
+    - curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file metadata.json "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${NAME}/${VERSION}/metadata.json"
+```
+
 It's that easy. Go forth and enjoy your newfound quality of life improvements,
 Rustacean.
 
