@@ -32,7 +32,6 @@ impl Gitlab {
     }
 }
 
-// TODO: errors are not yet handled, they're returned as {"error": "abc"}
 #[async_trait]
 impl super::UserProvider for Gitlab {
     async fn find_user_by_username_password_combo(
@@ -67,17 +66,19 @@ impl super::UserProvider for Gitlab {
     }
 
     async fn find_user_by_ssh_key(&self, fingerprint: &str) -> anyhow::Result<Option<User>> {
-        let res: GitlabSshKeyLookupResponse = self
-            .client
-            .get(format!(
-                "{}/keys?fingerprint={}",
-                self.base_url,
-                utf8_percent_encode(fingerprint, NON_ALPHANUMERIC)
-            ))
-            .send()
-            .await?
-            .json()
-            .await?;
+        let res: GitlabSshKeyLookupResponse = handle_error(
+            self.client
+                .get(format!(
+                    "{}/keys?fingerprint={}",
+                    self.base_url,
+                    utf8_percent_encode(fingerprint, NON_ALPHANUMERIC)
+                ))
+                .send()
+                .await?,
+        )
+        .await?
+        .json()
+        .await?;
         Ok(res.user.map(|u| User {
             id: u.id,
             username: u.username,
@@ -85,20 +86,22 @@ impl super::UserProvider for Gitlab {
     }
 
     async fn fetch_token_for_user(&self, user: &User) -> anyhow::Result<String> {
-        let impersonation_token: GitlabImpersonationTokenResponse = self
-            .client
-            .post(format!(
-                "{}/users/{}/impersonation_tokens",
-                self.base_url, user.id
-            ))
-            .json(&GitlabImpersonationTokenRequest {
-                name: env!("CARGO_PKG_NAME"),
-                scopes: vec!["api"],
-            })
-            .send()
-            .await?
-            .json()
-            .await?;
+        let impersonation_token: GitlabImpersonationTokenResponse = handle_error(
+            self.client
+                .post(format!(
+                    "{}/users/{}/impersonation_tokens",
+                    self.base_url, user.id
+                ))
+                .json(&GitlabImpersonationTokenRequest {
+                    name: env!("CARGO_PKG_NAME"),
+                    scopes: vec!["api"],
+                })
+                .send()
+                .await?,
+        )
+        .await?
+        .json()
+        .await?;
 
         Ok(impersonation_token.token)
     }
@@ -140,7 +143,7 @@ impl super::PackageProvider for Gitlab {
         let futures = FuturesUnordered::new();
 
         while let Some(uri) = next_uri.take() {
-            let res = self.client.get(uri).send().await?;
+            let res = handle_error(self.client.get(uri).send().await?).await?;
 
             if let Some(link_header) = res.headers().get(reqwest::header::LINK) {
                 let mut link_header = parse_link_header::parse_with_rel(link_header.to_str()?)?;
@@ -170,18 +173,20 @@ impl super::PackageProvider for Gitlab {
                             .to_string(),
                     });
 
-                    let package_files: Vec<GitlabPackageFilesResponse> = this
-                        .client
-                        .get(format!(
-                            "{}/projects/{}/packages/{}/package_files",
-                            this.base_url,
-                            utf8_percent_encode(project, NON_ALPHANUMERIC),
-                            utf8_percent_encode(package, NON_ALPHANUMERIC),
-                        ))
-                        .send()
-                        .await?
-                        .json()
-                        .await?;
+                    let package_files: Vec<GitlabPackageFilesResponse> = handle_error(
+                        this.client
+                            .get(format!(
+                                "{}/projects/{}/packages/{}/package_files",
+                                this.base_url,
+                                utf8_percent_encode(project, NON_ALPHANUMERIC),
+                                utf8_percent_encode(package, NON_ALPHANUMERIC),
+                            ))
+                            .send()
+                            .await?,
+                    )
+                    .await?
+                    .json()
+                    .await?;
 
                     let expected_file_name = format!("{}-{}.crate", release.name, release.version);
 
@@ -218,7 +223,10 @@ impl super::PackageProvider for Gitlab {
     ) -> anyhow::Result<cargo_metadata::Metadata> {
         let uri = format!("{}{}", self.base_url, path.metadata_uri(version),);
 
-        Ok(self.client.get(uri).send().await?.json().await?)
+        Ok(handle_error(self.client.get(uri).send().await?)
+            .await?
+            .json()
+            .await?)
     }
 
     fn cargo_dl_uri(&self, group: &Group, token: &str) -> String {

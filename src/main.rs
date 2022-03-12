@@ -279,7 +279,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
         let fingerprint = public_key.fingerprint();
         let user = user.to_string();
 
-        Box::pin(async move {
+        Box::pin(capture_errors(async move {
             let mut user = self
                 .gitlab
                 .find_user_by_username_password_combo(&user)
@@ -298,13 +298,13 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
             } else {
                 self.finished_auth(Auth::Reject).await
             }
-        })
+        }))
     }
 
     fn data(mut self, channel: ChannelId, data: &[u8], mut session: Session) -> Self::FutureUnit {
         self.input_bytes.extend_from_slice(data);
 
-        Box::pin(async move {
+        Box::pin(capture_errors(async move {
             // start building the packfile we're going to send to the user
             let (commit_hash, packfile_entries) = &*self.build_packfile().await?;
 
@@ -347,7 +347,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
             }
 
             Ok((self, session))
-        })
+        }))
     }
 
     fn env_request(
@@ -367,7 +367,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
     }
 
     fn shell_request(mut self, channel: ChannelId, mut session: Session) -> Self::FutureUnit {
-        Box::pin(async move {
+        Box::pin(capture_errors(async move {
             let username = self.user()?.username.clone();
             write!(
                 &mut self.output_bytes,
@@ -378,7 +378,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
             self.flush(&mut session, channel);
             session.close(channel);
             Ok((self, session))
-        })
+        }))
     }
 
     /// Initially when setting up the SSH connection, the remote Git client will send us an
@@ -395,12 +395,12 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
     ) -> Self::FutureUnit {
         let data = match std::str::from_utf8(data) {
             Ok(data) => data,
-            Err(e) => return Box::pin(futures::future::err(e.into())),
+            Err(e) => return Box::pin(capture_errors(futures::future::err(e.into()))),
         };
         // parses the given args in the same fashion as a POSIX shell
         let args = shlex::split(data);
 
-        Box::pin(async move {
+        Box::pin(capture_errors(async move {
             // if the client didn't send `GIT_PROTOCOL=version=2` as an environment
             // variable when connecting, we'll just close the connection
             if !self.is_git_protocol_v2 {
@@ -455,8 +455,21 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
             self.flush(&mut session, channel);
 
             Ok((self, session))
-        })
+        }))
     }
+}
+
+// a workaround for trussh swallowing errors
+async fn capture_errors<T>(
+    fut: impl Future<Output = Result<T, anyhow::Error>>,
+) -> Result<T, anyhow::Error> {
+    let res = fut.await;
+
+    if let Err(e) = &res {
+        error!("Error: {}", e);
+    }
+
+    res
 }
 
 #[derive(Hash, Debug, PartialEq, Eq)]
