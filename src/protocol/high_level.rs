@@ -75,7 +75,7 @@ impl GitRepository {
         Ok(())
     }
 
-    /// Finalises this `GitRepository` by writing a commit to the packfile_entries,
+    /// Finalises this `GitRepository` by writing a commit to the `packfile_entries`,
     /// all the files currently in the `tree`, returning all the packfile entries
     /// and also the commit hash so it can be referred to by `ls-ref`s.
     pub fn commit(

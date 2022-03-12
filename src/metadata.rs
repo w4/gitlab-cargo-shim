@@ -1,10 +1,13 @@
+#![allow(clippy::module_name_repetitions)]
+
 use cargo_metadata::Package;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Transforms metadata from `cargo metadata` to the standard one-line JSON used in cargo registries.
 ///
-/// https://github.com/rust-lang/cargo/blob/3bc0e6d83f7f5da0161ce445f8864b0b639776a9/src/cargo/ops/registry.rs#L183
+/// <https://github.com/rust-lang/cargo/blob/3bc0e6d83f7f5da0161ce445f8864b0b639776a9/src/cargo/ops/registry.rs#L183>
+#[must_use]
 pub fn transform(
     metadata: cargo_metadata::Metadata,
     crate_name: &str,
@@ -29,10 +32,9 @@ pub fn transform(
                 default_features: v.uses_default_features,
                 target: v.target.map(|v| v.to_string()),
                 kind: v.kind.to_string(),
-                registry: Some(
-                    v.registry
-                        .unwrap_or("https://github.com/rust-lang/crates.io-index.git".to_string()),
-                ),
+                registry: Some(v.registry.unwrap_or_else(|| {
+                    "https://github.com/rust-lang/crates.io-index.git".to_string()
+                })),
                 package: v.rename,
             })
             .collect(),

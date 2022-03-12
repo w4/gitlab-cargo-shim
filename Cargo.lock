@@ -510,7 +510,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "git-server"
+name = "gitlab-cargo-shim"
 version = "0.1.0"
 dependencies = [
  "anyhow",

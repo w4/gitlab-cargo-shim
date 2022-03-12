@@ -1,3 +1,5 @@
+#![allow(clippy::module_name_repetitions)]
+
 use crate::providers::{Group, Release, User};
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
@@ -185,6 +187,7 @@ impl super::PackageProvider for Gitlab {
                         package_files
                             .into_iter()
                             .filter_map(|package_file| {
+                                #[allow(clippy::case_sensitive_file_extension_comparisons)]
                                 if package_file.file_name.ends_with(".crate") {
                                     if package_file.file_name
                                         == format!("{}-{}.crate", release.name, release.version)
@@ -215,7 +218,7 @@ impl super::PackageProvider for Gitlab {
                             })
                             .collect(),
                     ))
-                }))
+                }));
             }
         }
 
@@ -260,8 +263,7 @@ async fn handle_error(resp: reqwest::Response) -> Result<reqwest::Response, anyh
         Err(anyhow::Error::msg(
             resp.message
                 .or(resp.error)
-                .map(Cow::Owned)
-                .unwrap_or_else(|| Cow::Borrowed("unknown error")),
+                .map_or_else(|| Cow::Borrowed("unknown error"), Cow::Owned)
         ))
     }
 }
@@ -294,6 +296,7 @@ pub struct GitlabCratePath {
 }
 
 impl GitlabCratePath {
+    #[must_use]
     pub fn metadata_uri(&self, version: &str) -> String {
         format!(
             "/projects/{}/packages/generic/{}/{version}/metadata.json",

@@ -13,8 +13,8 @@ pub fn handle<U: UserProvider + PackageProvider + Send + Sync + 'static>(
     handle: &mut Handler<U>,
     session: &mut Session,
     channel: ChannelId,
-    metadata: Vec<Bytes>,
-    packfile_entries: Vec<PackFileEntry>,
+    metadata: &[Bytes],
+    packfile_entries: &[PackFileEntry],
 ) -> Result<(), anyhow::Error> {
     // the client sending us `done` in the metadata means they know there's no negotiation
     // required for which commits we need to send, they just want us to send whatever we

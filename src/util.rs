@@ -1,3 +1,4 @@
+#[must_use]
 pub fn format_fingerprint(fingerprint: &str) -> String {
     format!("SHA256:{}", fingerprint)
 }
@@ -6,6 +7,7 @@ pub fn format_fingerprint(fingerprint: &str) -> String {
 /// 1, 2 or 3 respectively as per the cargo spec. Anything else we'll build out a normal tree for
 /// using the frist four characters of the crate name, 2 for the first directory and the other 2
 /// for the second.
+#[must_use]
 pub fn get_crate_folder(crate_name: &str) -> Vec<String> {
     let mut folders = Vec::new();
 

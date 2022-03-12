@@ -16,7 +16,7 @@ pub fn handle<U: UserProvider + PackageProvider + Send + Sync + 'static>(
     handle: &mut Handler<U>,
     session: &mut Session,
     channel: ChannelId,
-    _metadata: Vec<Bytes>,
+    _metadata: &[Bytes],
     commit_hash: &HashOutput,
 ) -> Result<(), anyhow::Error> {
     let commit_hash = hex::encode(&commit_hash);

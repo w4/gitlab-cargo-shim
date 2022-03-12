@@ -1,3 +1,6 @@
+#![deny(clippy::pedantic)]
+#![allow(clippy::missing_errors_doc)]
+
 pub mod git_command_handlers;
 pub mod metadata;
 pub mod protocol;
@@ -6,6 +9,7 @@ pub mod util;
 
 use crate::metadata::CargoIndexCrateMetadata;
 use crate::protocol::low_level::{HashOutput, PackFileEntry};
+use crate::providers::Group;
 use crate::util::get_crate_folder;
 use crate::{
     protocol::{
@@ -27,7 +31,6 @@ use thrussh::{
 use thrussh_keys::key::PublicKey;
 use tokio_util::{codec::Decoder, codec::Encoder as CodecEncoder};
 use tracing::error;
-use crate::providers::Group;
 
 const AGENT: &str = concat!(
     "agent=",
@@ -56,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
         "127.0.0.1:2210",
         Server {
             gitlab,
-            metadata_cache: Arc::new(Default::default()),
+            metadata_cache: MetadataCache::default(),
         },
     )
     .await?;
@@ -221,7 +224,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
                 // parses the `cargo metadata` stored in the release, which
                 // should be stored under `metadata.json`.
                 let meta = self
-                    .fetch_metadata(&crate_path, &checksum, &crate_name, &version)
+                    .fetch_metadata(crate_path, checksum, crate_name, version)
                     .await?;
 
                 buffer.extend_from_slice(&serde_json::to_vec(&*meta).unwrap());
@@ -229,7 +232,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             }
 
             packfile.insert(
-                get_crate_folder(&crate_name),
+                get_crate_folder(crate_name),
                 crate_name.to_string(),
                 buffer.split().freeze(),
             )?;
@@ -320,7 +323,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
                             &mut self,
                             &mut session,
                             channel,
-                            frame.metadata,
+                            &frame.metadata,
                             &commit_hash,
                         )?;
                     }
@@ -329,8 +332,8 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
                             &mut self,
                             &mut session,
                             channel,
-                            frame.metadata,
-                            packfile_entries.clone(),
+                            &frame.metadata,
+                            &packfile_entries,
                         )?;
                     }
                     v => {
@@ -416,9 +419,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
             // given to `git-upload-pack`)
             if let Some(group) = args.next().filter(|v| v.as_str() != "/") {
                 let user = self.user()?;
-                let group = group
-                    .trim_start_matches('/')
-                    .trim_end_matches('/');
+                let group = group.trim_start_matches('/').trim_end_matches('/');
 
                 match self.gitlab.clone().fetch_group(group, user).await {
                     Ok(v) => self.group = Some(v),

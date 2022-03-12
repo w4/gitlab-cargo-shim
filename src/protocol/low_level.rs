@@ -11,13 +11,13 @@ pub type HashOutput = [u8; 20];
 // which is sort of used to make sure you're getting the start of the
 // packfile correctly. This is followed by a 4-byte packfile version
 // number and then a 4-byte number of entries in that file.
-pub struct PackFile {
-    entries: Vec<PackFileEntry>,
+pub struct PackFile<'a> {
+    entries: &'a [PackFileEntry],
 }
 
-impl PackFile {
+impl<'a> PackFile<'a> {
     #[must_use]
-    pub fn new(entries: Vec<PackFileEntry>) -> Self {
+    pub fn new(entries: &'a [PackFileEntry]) -> Self {
         Self { entries }
     }
 
@@ -41,7 +41,7 @@ impl PackFile {
         buf.put_u32(self.entries.len().try_into()?); // number of entries in the packfile
 
         // body
-        for entry in &self.entries {
+        for entry in self.entries {
             entry.encode_to(&mut buf)?;
         }
 
