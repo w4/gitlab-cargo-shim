@@ -8,7 +8,7 @@ pub enum PktLine<'a> {
     Data(&'a [u8]),
     /// Similar to a data packet, but used during packfile sending to indicate this
     /// packet is a block of data by appending a byte containing the u8 `1`.
-    SidebandData(PackFile<'a>),
+    SidebandData(PackFile),
     /// Similar to a data packet, but used during packfile sending to indicate this
     /// packet is a status message by appending a byte containing the u8 `2`.
     SidebandMsg(&'a [u8]),

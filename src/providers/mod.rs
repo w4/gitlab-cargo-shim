@@ -11,15 +11,29 @@ pub trait UserProvider {
     ) -> anyhow::Result<Option<User>>;
 
     async fn find_user_by_ssh_key(&self, fingerprint: &str) -> anyhow::Result<Option<User>>;
+
+    async fn fetch_token_for_user(&self, user: &User) -> anyhow::Result<String>;
 }
 
 #[async_trait]
 pub trait PackageProvider {
+    /// Provider-specific metadata passed between `PackageProvider` methods to
+    /// figure out the path of a package.
+    type CratePath: std::fmt::Debug + Send + std::hash::Hash + Clone + Eq + PartialEq + Send + Sync;
+
     async fn fetch_releases_for_group(
         self: Arc<Self>,
         group: &str,
-        do_as: User,
-    ) -> anyhow::Result<Vec<Release>>;
+        do_as: &User,
+    ) -> anyhow::Result<Vec<(Self::CratePath, Release)>>;
+
+    async fn fetch_metadata_for_release(
+        self: Arc<Self>,
+        path: &Self::CratePath,
+        version: &str,
+    ) -> anyhow::Result<cargo_metadata::Metadata>;
+
+    fn cargo_dl_uri(&self, group: &str, token: &str) -> String;
 }
 
 #[derive(Debug, Clone)]
@@ -33,5 +47,4 @@ pub struct Release {
     pub name: String,
     pub version: String,
     pub checksum: String,
-    pub uri: String,
 }

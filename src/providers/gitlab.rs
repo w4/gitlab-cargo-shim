@@ -3,8 +3,12 @@ use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+const GITLAB_API_ENDPOINT: &str = "http://127.0.0.1:3000";
+// const PAT: &str = "glpat-saSjc4srMhxAA-qDp8F8";
+const PAT: &str = "X994NFZjTy1ZYbsCwTLK";
 
 pub struct Gitlab {
     client: reqwest::Client,
@@ -14,36 +18,18 @@ pub struct Gitlab {
 impl Gitlab {
     pub fn new() -> anyhow::Result<Self> {
         let mut headers = header::HeaderMap::new();
-        headers.insert(
-            "PRIVATE-TOKEN",
-            header::HeaderValue::from_static("token"),
-        );
+        headers.insert("PRIVATE-TOKEN", header::HeaderValue::from_static(PAT));
 
         Ok(Self {
             client: reqwest::ClientBuilder::new()
                 .default_headers(headers)
                 .build()?,
-            base_url: "https://127.0.0.1/api/v4".to_string(),
+            base_url: format!("{}/api/v4", GITLAB_API_ENDPOINT),
         })
-    }
-
-    pub async fn get_impersonation_token_for(&self, user: &User) -> anyhow::Result<String> {
-        let impersonation_token: GitlabImpersonationTokenResponse = self
-            .client
-            .get(format!(
-                "{}/users/{}/impersonation_tokens",
-                self.base_url, user.id
-            ))
-            .body(format!("name={};scopes=api", env!("CARGO_PKG_NAME")))
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        Ok(impersonation_token.token)
     }
 }
 
+// TODO: errors are not yet handled, they're returned as {"error": "abc"}
 #[async_trait]
 impl super::UserProvider for Gitlab {
     async fn find_user_by_username_password_combo(
@@ -51,7 +37,10 @@ impl super::UserProvider for Gitlab {
         username_password: &str,
     ) -> anyhow::Result<Option<User>> {
         let mut splitter = username_password.splitn(2, ':');
-        let (username, password) = (splitter.next().unwrap(), splitter.next().unwrap());
+        let (username, password) = match (splitter.next(), splitter.next()) {
+            (Some(username), Some(password)) => (username, password),
+            _ => return Ok(None),
+        };
 
         if username == "gitlab-ci-token" {
             let res: GitlabJobResponse = self
@@ -77,7 +66,8 @@ impl super::UserProvider for Gitlab {
             .client
             .get(format!(
                 "{}/keys?fingerprint={}",
-                self.base_url, fingerprint
+                self.base_url,
+                utf8_percent_encode(fingerprint, NON_ALPHANUMERIC)
             ))
             .send()
             .await?
@@ -88,19 +78,38 @@ impl super::UserProvider for Gitlab {
             username: u.username,
         }))
     }
+
+    async fn fetch_token_for_user(&self, user: &User) -> anyhow::Result<String> {
+        let impersonation_token: GitlabImpersonationTokenResponse = self
+            .client
+            .post(format!(
+                "{}/users/{}/impersonation_tokens",
+                self.base_url, user.id
+            ))
+            .json(&GitlabImpersonationTokenRequest {
+                name: env!("CARGO_PKG_NAME"),
+                scopes: vec!["api"],
+            })
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        Ok(impersonation_token.token)
+    }
 }
 
 #[async_trait]
 impl super::PackageProvider for Gitlab {
+    type CratePath = Arc<GitlabCratePath>;
+
     async fn fetch_releases_for_group(
         self: Arc<Self>,
         group: &str,
-        do_as: User,
-    ) -> anyhow::Result<Vec<Release>> {
-        let impersonation_token = Arc::new(self.get_impersonation_token_for(&do_as).await?);
-
+        do_as: &User,
+    ) -> anyhow::Result<Vec<(Self::CratePath, Release)>> {
         let mut next_uri = Some(format!(
-            "{}/groups/{}/packages?per_page=100&pagination=keyset&order_by=id&sort=asc&sudo={}",
+            "{}/groups/{}/packages?per_page=100&pagination=keyset&sort=asc&sudo={}",
             self.base_url,
             utf8_percent_encode(group, NON_ALPHANUMERIC),
             do_as.id
@@ -123,7 +132,6 @@ impl super::PackageProvider for Gitlab {
 
             for release in res {
                 let this = self.clone();
-                let impersonation_token = impersonation_token.clone();
 
                 futures.push(tokio::spawn(async move {
                     let (project, package) = {
@@ -134,7 +142,13 @@ impl super::PackageProvider for Gitlab {
                         }
                     };
 
-                    let package_files: GitlabPackageFilesResponse = this
+                    let package_path = Arc::new(GitlabCratePath {
+                        project: utf8_percent_encode(project, NON_ALPHANUMERIC).to_string(),
+                        package_name: utf8_percent_encode(&release.name, NON_ALPHANUMERIC)
+                            .to_string(),
+                    });
+
+                    let package_files: Vec<GitlabPackageFilesResponse> = this
                         .client
                         .get(format!(
                             "{}/projects/{}/packages/{}/package_files",
@@ -147,30 +161,95 @@ impl super::PackageProvider for Gitlab {
                         .json()
                         .await?;
 
-                    Ok::<_, anyhow::Error>(Some(Release {
-                        uri: format!(
-                            "{}/projects/{}/packages/generic/{}/{}/{}?private_token={}",
-                            this.base_url,
-                            utf8_percent_encode(project, NON_ALPHANUMERIC),
-                            utf8_percent_encode(&release.name, NON_ALPHANUMERIC),
-                            utf8_percent_encode(&release.version, NON_ALPHANUMERIC),
-                            package_files.file_name,
-                            impersonation_token,
-                        ),
-                        name: release.name,
-                        version: release.version,
-                        checksum: package_files.file_sha256,
-                    }))
+                    Ok::<_, anyhow::Error>(Some(
+                        package_files
+                            .into_iter()
+                            .filter_map(|package_file| {
+                                if package_file.file_name.ends_with(".crate") {
+                                    if package_file.file_name
+                                        == format!("{}-{}.crate", release.name, release.version)
+                                    {
+                                        Some((
+                                            package_path.clone(),
+                                            Release {
+                                                name: release.name.clone(),
+                                                version: release.version.clone(),
+                                                checksum: package_file.file_sha256,
+                                            },
+                                        ))
+                                    } else {
+                                        tracing::info!(
+                                            "{}/{}/{}/{} should be called {}-{}.crate",
+                                            project,
+                                            release.name,
+                                            release.version,
+                                            package_file.file_name,
+                                            release.name,
+                                            release.version
+                                        );
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    ))
                 }))
             }
         }
 
-        futures
+        let x: Vec<Vec<_>> = futures
             .err_into()
             .filter_map(|v| async move { v.and_then(|v| v).transpose() })
             .try_collect()
-            .await
+            .await?;
+
+        Ok(x.into_iter().flatten().collect())
     }
+
+    async fn fetch_metadata_for_release(
+        self: Arc<Self>,
+        path: &Self::CratePath,
+        version: &str,
+    ) -> anyhow::Result<cargo_metadata::Metadata> {
+        let uri = format!(
+            "{}{}?private_token={}",
+            self.base_url,
+            path.metadata_uri(version),
+            PAT,
+        );
+
+        Ok(self.client.get(uri).send().await?.json().await?)
+    }
+
+    fn cargo_dl_uri(&self, group: &str, token: &str) -> String {
+        format!(
+            "{}/groups/{group}/packages/generic/{{sha256-checksum}}/{{crate}}-{{version}}.crate?private_token={token}",
+            self.base_url
+        )
+    }
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct GitlabCratePath {
+    project: String,
+    package_name: String,
+}
+
+impl GitlabCratePath {
+    pub fn metadata_uri(&self, version: &str) -> String {
+        format!(
+            "/projects/{}/packages/generic/{}/{version}/metadata.json",
+            self.project, self.package_name
+        )
+    }
+}
+
+#[derive(Serialize)]
+pub struct GitlabImpersonationTokenRequest {
+    name: &'static str,
+    scopes: Vec<&'static str>,
 }
 
 #[derive(Deserialize)]

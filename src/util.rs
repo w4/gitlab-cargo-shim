@@ -1,18 +1,24 @@
-/// Retrieves the key fingerprint, encoded in hex and separated in two character chunks
-/// with colons.
-pub fn format_fingerprint(fingerprint: &str) -> Result<String, thrussh_keys::Error> {
-    let raw_hex = hex::encode(
-        base64::decode(&fingerprint).map_err(|_| thrussh_keys::Error::CouldNotReadKey)?,
-    );
-    let mut hex = String::with_capacity(raw_hex.len() + (raw_hex.len() / 2 - 1));
+pub fn format_fingerprint(fingerprint: &str) -> String {
+    format!("SHA256:{}", fingerprint)
+}
 
-    for (i, c) in raw_hex.chars().enumerate() {
-        if i != 0 && i % 2 == 0 {
-            hex.push(':');
+/// Crates with a total of 1, 2 or 3 characters in the same are written out to directories named
+/// 1, 2 or 3 respectively as per the cargo spec. Anything else we'll build out a normal tree for
+/// using the frist four characters of the crate name, 2 for the first directory and the other 2
+/// for the second.
+pub fn get_crate_folder(crate_name: &str) -> Vec<String> {
+    let mut folders = Vec::new();
+
+    match crate_name.len() {
+        0 => {}
+        1 => folders.push("1".to_string()),
+        2 => folders.push("2".to_string()),
+        3 => folders.push("3".to_string()),
+        _ => {
+            folders.push(crate_name[..2].to_string());
+            folders.push(crate_name[2..4].to_string());
         }
-
-        hex.push(c);
     }
 
-    Ok(hex)
+    folders
 }

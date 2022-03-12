@@ -1,16 +1,32 @@
+pub mod git_command_handlers;
+pub mod metadata;
 pub mod protocol;
 pub mod providers;
 pub mod util;
 
-use crate::{providers::{gitlab::Gitlab, PackageProvider, Release, User, UserProvider}, protocol::{codec::Encoder, packet_line::PktLine}};
+use crate::metadata::CargoIndexCrateMetadata;
+use crate::protocol::low_level::{HashOutput, PackFileEntry};
+use crate::util::get_crate_folder;
+use crate::{
+    protocol::{
+        codec::{Encoder, GitCodec},
+        high_level::GitRepository,
+        packet_line::PktLine,
+    },
+    providers::{gitlab::Gitlab, PackageProvider, Release, User, UserProvider},
+};
+use anyhow::anyhow;
+use bytes::{BufMut, Bytes, BytesMut};
 use futures::Future;
-use std::{net::SocketAddr, pin::Pin, sync::Arc, fmt::Write};
-use bytes::BytesMut;
-use thrussh::{server::{Auth, Session}, ChannelId, CryptoVec};
+use parking_lot::RwLock;
+use std::{borrow::Cow, collections::HashMap, fmt::Write, net::SocketAddr, pin::Pin, sync::Arc};
+use thrussh::{
+    server::{Auth, Session},
+    ChannelId, CryptoVec,
+};
 use thrussh_keys::key::PublicKey;
-use tokio::task::JoinHandle;
-use tokio_util::codec::Encoder as CodecEncoder;
-use crate::protocol::high_level::GitRepository;
+use tokio_util::{codec::Decoder, codec::Encoder as CodecEncoder};
+use tracing::error;
 
 const AGENT: &str = concat!(
     "agent=",
@@ -22,6 +38,8 @@ const AGENT: &str = concat!(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+
     let ed25519_key = thrussh_keys::key::KeyPair::generate_ed25519().unwrap();
 
     let thrussh_config = Arc::new(thrussh::server::Config {
@@ -32,12 +50,23 @@ async fn main() -> anyhow::Result<()> {
 
     let gitlab = Arc::new(Gitlab::new()?);
 
-    thrussh::server::run(thrussh_config, "127.0.0.1:2222", Server { gitlab }).await?;
+    thrussh::server::run(
+        thrussh_config,
+        "127.0.0.1:2210",
+        Server {
+            gitlab,
+            metadata_cache: Arc::new(Default::default()),
+        },
+    )
+    .await?;
     Ok(())
 }
 
+type MetadataCache = Arc<RwLock<HashMap<MetadataCacheKey<'static>, Arc<CargoIndexCrateMetadata>>>>;
+
 struct Server<U: UserProvider + PackageProvider + Send + Sync + 'static> {
     gitlab: Arc<U>,
+    metadata_cache: MetadataCache,
 }
 
 impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server::Server
@@ -47,25 +76,31 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
 
     fn new(&mut self, _peer_addr: Option<SocketAddr>) -> Self::Handler {
         Handler {
+            codec: GitCodec::default(),
             gitlab: self.gitlab.clone(),
             user: None,
             group: None,
-            fetcher_future: None,
+            // fetcher_future: None,
             input_bytes: BytesMut::new(),
             output_bytes: BytesMut::new(),
-            is_git_protocol_v2: false
+            is_git_protocol_v2: false,
+            metadata_cache: self.metadata_cache.clone(),
+            packfile_cache: None,
         }
     }
 }
 
-struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
+pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
+    codec: GitCodec,
     gitlab: Arc<U>,
     user: Option<User>,
     group: Option<String>,
-    fetcher_future: Option<JoinHandle<anyhow::Result<Vec<Release>>>>,
+    // fetcher_future: Option<JoinHandle<anyhow::Result<Vec<Release>>>>,
     input_bytes: BytesMut,
     output_bytes: BytesMut,
     is_git_protocol_v2: bool,
+    metadata_cache: MetadataCache,
+    packfile_cache: Option<(HashOutput, Vec<PackFileEntry>)>,
 }
 
 impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
@@ -88,9 +123,126 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         );
     }
 
-    async fn fetch_releases(&self, group: &str) -> anyhow::Result<Vec<Release>> {
+    async fn fetch_releases_by_crate(
+        &self,
+        group: &str,
+    ) -> anyhow::Result<HashMap<(U::CratePath, String), Vec<Release>>> {
         let user = self.user()?;
-        self.gitlab.clone().fetch_releases_for_group(group, user.clone()).await
+
+        let mut res = HashMap::new();
+
+        for (path, release) in self
+            .gitlab
+            .clone()
+            .fetch_releases_for_group(group, user)
+            .await?
+        {
+            res.entry((path, release.name.clone()))
+                .or_insert_with(Vec::new)
+                .push(release);
+        }
+
+        Ok(res)
+    }
+
+    async fn fetch_metadata(
+        &self,
+        path: &U::CratePath,
+        checksum: &str,
+        crate_name: &str,
+        crate_version: &str,
+    ) -> anyhow::Result<Arc<CargoIndexCrateMetadata>> {
+        let key = MetadataCacheKey {
+            checksum: checksum.into(),
+            crate_name: crate_name.into(),
+            crate_version: crate_version.into(),
+        };
+
+        {
+            let reader = self.metadata_cache.read();
+            if let Some(cache) = reader.get(&key) {
+                return Ok(cache.clone());
+            }
+        }
+
+        let metadata = self
+            .gitlab
+            .clone()
+            .fetch_metadata_for_release(path, crate_version)
+            .await?;
+
+        // transform the `cargo metadata` output to the cargo index
+        // format
+        let cksum = checksum.to_string();
+        let metadata = metadata::transform(metadata, crate_name, cksum)
+            .map(Arc::new)
+            .ok_or_else(|| anyhow!("the supplied metadata.json did contain the released crate"))?;
+
+        {
+            let mut writer = self.metadata_cache.write();
+            writer.insert(key.into_owned(), metadata.clone());
+        }
+
+        Ok(metadata)
+    }
+
+    async fn build_packfile(&mut self) -> anyhow::Result<(HashOutput, Vec<PackFileEntry>)> {
+        if let Some(packfile_cache) = &self.packfile_cache {
+            // TODO
+            return Ok(packfile_cache.clone());
+        }
+
+        let mut packfile = GitRepository::default();
+
+        let user = self.user()?;
+        let group = self.group()?;
+
+        let token = self.gitlab.fetch_token_for_user(user).await?;
+
+        let config_json = Bytes::from(format!(
+            "{{\"dl\": \"{}\"}}",
+            self.gitlab.cargo_dl_uri(group, &token)
+        ));
+
+        // write config.json to the root of the repo
+        packfile.insert(vec![], "config.json".to_string(), config_json)?;
+
+        // fetch the releases for every project within the given group
+        let releases_by_crate = self.fetch_releases_by_crate(group).await?;
+
+        let mut buffer = BytesMut::new();
+
+        for ((crate_path, crate_name), releases) in &releases_by_crate {
+            for release in releases {
+                let checksum = &release.checksum;
+                let version = &release.version;
+
+                // parses the `cargo metadata` stored in the release, which
+                // should be stored under `metadata.json`.
+                let meta = self
+                    .fetch_metadata(&crate_path, &checksum, &crate_name, &version)
+                    .await?;
+
+                buffer.extend_from_slice(&serde_json::to_vec(&*meta).unwrap());
+                buffer.put_u8(b'\n');
+            }
+
+            packfile.insert(
+                get_crate_folder(&crate_name),
+                crate_name.to_string(),
+                buffer.split().freeze(),
+            )?;
+        }
+
+        let packfile = packfile.commit(
+            "test".to_string(),
+            "test@test.com".to_string(),
+            "test".to_string(),
+        )?;
+
+        self.packfile_cache = Some(packfile.clone());
+
+        Ok(packfile)
     }
 }
 
@@ -131,41 +283,66 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
             if user.is_none() {
                 user = self
                     .gitlab
-                    .find_user_by_ssh_key(&util::format_fingerprint(&fingerprint)?)
+                    .find_user_by_ssh_key(&util::format_fingerprint(&fingerprint))
                     .await?;
             }
 
-            self.user = Some(user.ok_or(anyhow::anyhow!("failed to find user"))?);
-
-            self.finished_auth(Auth::Accept).await
+            if let Some(user) = user {
+                self.user = Some(user);
+                self.finished_auth(Auth::Accept).await
+            } else {
+                self.finished_auth(Auth::Reject).await
+            }
         })
     }
 
     fn data(mut self, channel: ChannelId, data: &[u8], mut session: Session) -> Self::FutureUnit {
         self.input_bytes.extend_from_slice(data);
 
-        Box::pin(
-            async move {
-                while let Some(frame) = self.codec.decode(&mut self.input_bytes)? {
-                    // if the client flushed without giving us a command, we're expected to close
-                    // the connection or else the client will just hang
-                    if frame.command.is_empty() {
-                        session.exit_status_request(channel, 0);
-                        session.eof(channel);
-                        session.close(channel);
-                        return Ok((self, session));
-                    }
+        Box::pin(async move {
+            // start building the packfile we're going to send to the user
+            let (commit_hash, packfile_entries) = self.build_packfile().await?;
 
-                    let user = self.user()?;
-                    let group = self.group()?;
-
-                    // start building the packfile we're going to send to the user
-                    let mut packfile = GitRepository::default();
+            while let Some(frame) = self.codec.decode(&mut self.input_bytes)? {
+                // if the client flushed without giving us a command, we're expected to close
+                // the connection or else the client will just hang
+                if frame.command.is_empty() {
+                    session.exit_status_request(channel, 0);
+                    session.eof(channel);
+                    session.close(channel);
+                    return Ok((self, session));
                 }
 
-                Ok((self, session))
+                match frame.command.as_ref() {
+                    b"command=ls-refs" => {
+                        git_command_handlers::ls_refs::handle(
+                            &mut self,
+                            &mut session,
+                            channel,
+                            frame.metadata,
+                            &commit_hash,
+                        )?;
+                    }
+                    b"command=fetch" => {
+                        git_command_handlers::fetch::handle(
+                            &mut self,
+                            &mut session,
+                            channel,
+                            frame.metadata,
+                            packfile_entries.clone(),
+                        )?;
+                    }
+                    v => {
+                        error!(
+                            "Client sent unknown command, ignoring command {}",
+                            std::str::from_utf8(v).unwrap_or("invalid utf8")
+                        );
+                    }
+                }
             }
-        )
+
+            Ok((self, session))
+        })
     }
 
     fn env_request(
@@ -263,5 +440,22 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
 
             Ok((self, session))
         })
+    }
+}
+
+#[derive(Hash, Debug, PartialEq, Eq)]
+struct MetadataCacheKey<'a> {
+    checksum: Cow<'a, str>,
+    crate_name: Cow<'a, str>,
+    crate_version: Cow<'a, str>,
+}
+
+impl MetadataCacheKey<'_> {
+    pub fn into_owned(self) -> MetadataCacheKey<'static> {
+        MetadataCacheKey {
+            checksum: self.checksum.into_owned().into(),
+            crate_name: self.crate_name.into_owned().into(),
+            crate_version: self.crate_version.into_owned().into(),
+        }
     }
 }

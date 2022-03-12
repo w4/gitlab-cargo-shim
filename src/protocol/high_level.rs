@@ -6,7 +6,7 @@
 //! for our purposes because `cargo` will `git pull --force` from our Git
 //! server, allowing us to ignore any history the client may have.
 
-use arrayvec::ArrayVec;
+use bytes::Bytes;
 use indexmap::IndexMap;
 
 use super::low_level::{
@@ -18,25 +18,25 @@ use super::low_level::{
 /// Builds a whole packfile containing files, directories and commits - essentially
 /// building out a full Git repository in memory.
 #[derive(Default, Debug)]
-pub struct GitRepository<'a> {
+pub struct GitRepository {
     /// A map containing all the blobs and their corresponding hashes so they're
     /// not inserted more than once for any files in the whole tree with the same
     /// content.
-    packfile_entries: IndexMap<HashOutput, PackFileEntry<'a>>,
+    packfile_entries: IndexMap<HashOutput, PackFileEntry>,
     /// An in-progress `Tree` currently being built out, the tree refers to items
     /// in `file_entries` by hash.
-    tree: Tree<'a>,
+    tree: Tree,
 }
 
-impl<'a> GitRepository<'a> {
+impl GitRepository {
     /// Inserts a file into the repository, writing a file to the path
     /// `path/to/my-file` would require a `path` of `["path", "to"]`
     /// and a `file` of `"my-file"`.
-    pub fn insert<const N: usize>(
+    pub fn insert(
         &mut self,
-        path: ArrayVec<&'a str, N>,
-        file: &'a str,
-        content: &'a [u8],
+        path: Vec<String>,
+        file: String,
+        content: Bytes,
     ) -> Result<(), anyhow::Error> {
         // we'll initialise the directory to the root of the tree, this means
         // if a path isn't specified we'll just write it to the root directory
@@ -79,13 +79,15 @@ impl<'a> GitRepository<'a> {
     /// all the files currently in the `tree`, returning all the packfile entries
     /// and also the commit hash so it can be referred to by `ls-ref`s.
     pub fn commit(
-        &'a mut self,
-        name: &'static str,
-        email: &'static str,
-        message: &'static str,
-    ) -> Result<(HashOutput, Vec<PackFileEntry<'a>>), anyhow::Error> {
+        mut self,
+        name: String,
+        email: String,
+        message: String,
+    ) -> Result<(HashOutput, Vec<PackFileEntry>), anyhow::Error> {
         // gets the hash of the entire tree from the root
-        let tree_hash = self.tree.to_packfile_entries(&mut self.packfile_entries)?;
+        let tree_hash = self
+            .tree
+            .into_packfile_entries(&mut self.packfile_entries)?;
 
         // build the commit using the given inputs
         let commit_user = CommitUserInfo {
@@ -96,7 +98,7 @@ impl<'a> GitRepository<'a> {
 
         let commit = PackFileEntry::Commit(Commit {
             tree: tree_hash,
-            author: commit_user,
+            author: commit_user.clone(),
             committer: commit_user,
             message,
         });
@@ -105,34 +107,33 @@ impl<'a> GitRepository<'a> {
         let commit_hash = commit.hash()?;
         self.packfile_entries.insert(commit_hash, commit);
 
-        // TODO: make PackFileEntry copy and remove this clone
         Ok((
             commit_hash,
-            self.packfile_entries.values().cloned().collect(),
+            self.packfile_entries.into_iter().map(|(_, v)| v).collect(),
         ))
     }
 }
 
 /// An in-progress tree builder, containing file hashes along with their names or nested trees
 #[derive(Default, Debug)]
-struct Tree<'a>(IndexMap<&'a str, Box<TreeItem<'a>>>);
+struct Tree(IndexMap<String, Box<TreeItem>>);
 
-impl<'a> Tree<'a> {
+impl Tree {
     /// Recursively writes the the whole tree out to the given `pack_file`,
     /// the tree contains pointers to (hashes of) files contained within a
     /// directory, and pointers to other directories.
-    fn to_packfile_entries(
-        &self,
-        pack_file: &mut IndexMap<HashOutput, PackFileEntry<'a>>,
+    fn into_packfile_entries(
+        self,
+        pack_file: &mut IndexMap<HashOutput, PackFileEntry>,
     ) -> Result<HashOutput, anyhow::Error> {
         let mut tree = Vec::with_capacity(self.0.len());
 
-        for (name, item) in &self.0 {
-            tree.push(match item.as_ref() {
+        for (name, item) in self.0 {
+            tree.push(match *item {
                 TreeItem::Blob(hash) => LowLevelTreeItem {
                     kind: TreeItemKind::File,
                     name,
-                    hash: *hash,
+                    hash,
                 },
                 TreeItem::Tree(tree) => LowLevelTreeItem {
                     kind: TreeItemKind::Directory,
@@ -140,7 +141,7 @@ impl<'a> Tree<'a> {
                     // we're essentially working through our tree from the bottom up,
                     // so we can grab the hash of each directory along the way and
                     // reference it from the parent directory
-                    hash: tree.to_packfile_entries(pack_file)?,
+                    hash: tree.into_packfile_entries(pack_file)?,
                 },
             });
         }
@@ -157,9 +158,9 @@ impl<'a> Tree<'a> {
 
 /// An item within a `Tree`, this could be a file blob or another directory.
 #[derive(Debug)]
-enum TreeItem<'a> {
+enum TreeItem {
     /// Refers to a file by hash
     Blob(HashOutput),
     /// Refers to a nested directory
-    Tree(Tree<'a>),
+    Tree(Tree),
 }

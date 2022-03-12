@@ -1,4 +1,4 @@
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use flate2::{write::ZlibEncoder, Compression};
 use sha1::Digest;
 use std::{convert::TryInto, fmt::Write, io::Write as IoWrite};
@@ -11,13 +11,13 @@ pub type HashOutput = [u8; 20];
 // which is sort of used to make sure you're getting the start of the
 // packfile correctly. This is followed by a 4-byte packfile version
 // number and then a 4-byte number of entries in that file.
-pub struct PackFile<'a> {
-    entries: Vec<PackFileEntry<'a>>,
+pub struct PackFile {
+    entries: Vec<PackFileEntry>,
 }
 
-impl<'a> PackFile<'a> {
+impl PackFile {
     #[must_use]
-    pub fn new(entries: Vec<PackFileEntry<'a>>) -> Self {
+    pub fn new(entries: Vec<PackFileEntry>) -> Self {
         Self { entries }
     }
 
@@ -54,17 +54,17 @@ impl<'a> PackFile<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Commit<'a> {
+#[derive(Debug, Clone)]
+pub struct Commit {
     pub tree: HashOutput,
     // pub parent: [u8; 20],
-    pub author: CommitUserInfo<'a>,
-    pub committer: CommitUserInfo<'a>,
+    pub author: CommitUserInfo,
+    pub committer: CommitUserInfo,
     // pub gpgsig: &str,
-    pub message: &'a str,
+    pub message: String,
 }
 
-impl Commit<'_> {
+impl Commit {
     fn encode_to(&self, out: &mut BytesMut) -> Result<(), anyhow::Error> {
         let mut tree_hex = [0_u8; 20 * 2];
         hex::encode_to_slice(self.tree, &mut tree_hex)?;
@@ -91,14 +91,14 @@ impl Commit<'_> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct CommitUserInfo<'a> {
-    pub name: &'a str,
-    pub email: &'a str,
+#[derive(Clone, Debug)]
+pub struct CommitUserInfo {
+    pub name: String,
+    pub email: String,
     pub time: time::OffsetDateTime,
 }
 
-impl CommitUserInfo<'_> {
+impl CommitUserInfo {
     fn encode(&self) -> String {
         // TODO: remove `format!`, `format_args!`?
         format!(
@@ -138,15 +138,15 @@ impl TreeItemKind {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct TreeItem<'a> {
+#[derive(Debug, Clone)]
+pub struct TreeItem {
     pub kind: TreeItemKind,
-    pub name: &'a str,
+    pub name: String,
     pub hash: HashOutput,
 }
 
 // `[mode] [name]\0[hash]`
-impl TreeItem<'_> {
+impl TreeItem {
     fn encode_to(&self, out: &mut BytesMut) -> Result<(), anyhow::Error> {
         out.write_str(self.kind.mode())?;
         write!(out, " {}\0", self.name)?;
@@ -161,7 +161,7 @@ impl TreeItem<'_> {
 }
 
 #[derive(Debug, Clone)] // could be copy but Vec<TreeItem<'a>>
-pub enum PackFileEntry<'a> {
+pub enum PackFileEntry {
     // jordan@Jordans-MacBook-Pro-2 0d % printf "\x1f\x8b\x08\x00\x00\x00\x00\x00" | cat - f5/473259d9674ed66239766a013f96a3550374e3 | gzip -dc
     // commit 1068tree 0d586b48bc42e8591773d3d8a7223551c39d453c
     // parent c2a862612a14346ae95234f26efae1ee69b5b7a9
@@ -185,20 +185,20 @@ pub enum PackFileEntry<'a> {
     // -----END PGP SIGNATURE-----
     //
     // test
-    Commit(Commit<'a>),
+    Commit(Commit),
     // jordan@Jordans-MacBook-Pro-2 0d % printf "\x1f\x8b\x08\x00\x00\x00\x00\x00" | cat - 0d/586b48bc42e8591773d3d8a7223551c39d453c | gzip -dc
     // tree 20940000 .cargo���CYy��Ve�������100644 .gitignore�K��_ow�]����4�n�ݺ100644 Cargo.lock�7�3-�?/��
     // kt��c0C�100644 Cargo.toml�6�&(��]\8@�SHA�]f40000 src0QW��ƅ���b[�!�S&N�100644 test�G2Y�gN�b9vj?��Ut�
-    Tree(Vec<TreeItem<'a>>),
+    Tree(Vec<TreeItem>),
     // jordan@Jordans-MacBook-Pro-2 objects % printf "\x1f\x8b\x08\x00\x00\x00\x00\x00" | cat - f5/473259d9674ed66239766a013f96a3550374e3| gzip -dc
     // blob 23try and find me in .git
-    Blob(&'a [u8]),
+    Blob(Bytes),
     // Tag,
     // OfsDelta,
     // RefDelta,
 }
 
-impl PackFileEntry<'_> {
+impl PackFileEntry {
     fn write_header(&self, buf: &mut BytesMut) {
         let mut size = self.uncompressed_size();
 
