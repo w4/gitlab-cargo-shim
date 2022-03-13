@@ -61,7 +61,7 @@ pub struct Commit {
     pub author: CommitUserInfo,
     pub committer: CommitUserInfo,
     // pub gpgsig: &str,
-    pub message: String,
+    pub message: &'static str,
 }
 
 impl Commit {
@@ -93,8 +93,8 @@ impl Commit {
 
 #[derive(Clone, Debug)]
 pub struct CommitUserInfo {
-    pub name: String,
-    pub email: String,
+    pub name: &'static str,
+    pub email: &'static str,
     pub time: time::OffsetDateTime,
 }
 

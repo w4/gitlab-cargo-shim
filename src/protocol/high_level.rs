@@ -55,7 +55,7 @@ impl GitRepository {
                 directory = d;
             } else {
                 // TODO: how should we handle this? one of items we tried to
-                //  recurse into was a directory.
+                //  recurse into was a file.
                 anyhow::bail!("attempted to use a file as a directory");
             }
         }
@@ -80,9 +80,9 @@ impl GitRepository {
     /// and also the commit hash so it can be referred to by `ls-ref`s.
     pub fn commit(
         mut self,
-        name: String,
-        email: String,
-        message: String,
+        name: &'static str,
+        email: &'static str,
+        message: &'static str,
     ) -> Result<(HashOutput, Vec<PackFileEntry>), anyhow::Error> {
         // gets the hash of the entire tree from the root
         let tree_hash = self

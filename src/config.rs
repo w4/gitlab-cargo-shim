@@ -2,6 +2,7 @@
 
 use clap::Parser;
 use serde::{de::DeserializeOwned, Deserialize};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[clap(version = clap::crate_version!(), author = clap::crate_authors!())]
@@ -11,7 +12,9 @@ pub struct Args {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct Config {
+    pub state_directory: PathBuf,
     pub gitlab: GitlabConfig,
 }
 

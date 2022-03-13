@@ -1,3 +1,7 @@
+# directory in which the generated private keys for the server
+# should be stored
+state-directory = "/var/lib/gitlab-cargo-shim"
+
 [gitlab]
 # the base url of the gitlab instance
 uri = "http://127.0.0.1:3000"

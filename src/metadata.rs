@@ -45,6 +45,11 @@ pub fn transform(
     })
 }
 
+#[derive(Serialize)]
+pub struct CargoConfig {
+    pub dl: String,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CargoIndexCrateMetadata {
     name: String,

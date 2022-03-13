@@ -10,7 +10,7 @@ pub mod util;
 
 use crate::{
     config::Args,
-    metadata::CargoIndexCrateMetadata,
+    metadata::{CargoConfig, CargoIndexCrateMetadata},
     protocol::{
         codec::{Encoder, GitCodec},
         high_level::GitRepository,
@@ -32,7 +32,7 @@ use thrussh::{
 };
 use thrussh_keys::key::PublicKey;
 use tokio_util::{codec::Decoder, codec::Encoder as CodecEncoder};
-use tracing::error;
+use tracing::{error, info};
 
 const AGENT: &str = concat!(
     "agent=",
@@ -48,11 +48,43 @@ async fn main() -> anyhow::Result<()> {
 
     let args: Args = Args::parse();
 
-    let ed25519_key = thrussh_keys::key::KeyPair::generate_ed25519().unwrap();
+    if !args.config.state_directory.exists() {
+        std::fs::create_dir_all(&args.config.state_directory)?;
+    }
+
+    let server_private_key = args.config.state_directory.join("ssh-private-key.pem");
+
+    let key = if server_private_key.exists() {
+        let key_bytes = std::fs::read(&server_private_key)?;
+        if key_bytes.len() != 64 {
+            anyhow::bail!(
+                "invalid private key. length = {}, expected = 64",
+                key_bytes.len()
+            );
+        }
+
+        let mut key = [0_u8; 64];
+        key.copy_from_slice(&key_bytes);
+
+        thrussh_keys::key::KeyPair::Ed25519(thrussh_keys::key::ed25519::SecretKey { key })
+    } else {
+        info!(
+            "Generating new server private key to {}",
+            server_private_key.display()
+        );
+
+        let key = thrussh_keys::key::KeyPair::generate_ed25519()
+            .ok_or_else(|| anyhow!("failed to generate server private key"))?;
+        let thrussh_keys::key::KeyPair::Ed25519(key) = key;
+
+        std::fs::write(server_private_key, &key.key)?;
+
+        thrussh_keys::key::KeyPair::Ed25519(key)
+    };
 
     let thrussh_config = Arc::new(thrussh::server::Config {
         methods: thrussh::MethodSet::PUBLICKEY,
-        keys: vec![ed25519_key],
+        keys: vec![key],
         ..thrussh::server::Config::default()
     });
 
@@ -122,10 +154,13 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         self.group.as_ref().ok_or(anyhow::anyhow!("no group set"))
     }
 
+    /// Writes a Git packet line response to the buffer, this should only
+    /// be used once the client opens a `shell_request`.
     fn write(&mut self, packet: PktLine<'_>) -> Result<(), anyhow::Error> {
         Encoder.encode(packet, &mut self.output_bytes)
     }
 
+    /// Flushes the buffer out to the client
     fn flush(&mut self, session: &mut Session, channel: ChannelId) {
         session.data(
             channel,
@@ -133,6 +168,8 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         );
     }
 
+    /// Fetches all the releases from the provider for the given group
+    /// and groups them by crate.
     async fn fetch_releases_by_crate(
         &self,
     ) -> anyhow::Result<HashMap<(U::CratePath, String), Vec<Release>>> {
@@ -153,6 +190,10 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         Ok(res)
     }
 
+    /// Fetches metadata from the provider for a given crate, this is
+    /// globally cache-able since it's immutable, to get to this call
+    /// the user must've already fetched the crate path from the provider
+    /// and hence verified they have permission to read it.
     async fn fetch_metadata(
         &self,
         path: &U::CratePath,
@@ -166,6 +207,8 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             crate_version: crate_version.into(),
         };
 
+        // check if the crate metadata already exists in our cache, if it does
+        // we'll just return that
         {
             let reader = self.metadata_cache.read();
             if let Some(cache) = reader.get(&key) {
@@ -173,6 +216,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             }
         }
 
+        // fetch metadata from the provider
         let metadata = Arc::clone(&self.gitlab)
             .fetch_metadata_for_release(path, crate_version)
             .await?;
@@ -184,6 +228,8 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             .map(Arc::new)
             .ok_or_else(|| anyhow!("the supplied metadata.json did contain the released crate"))?;
 
+        // cache the transformed value so the next user to pull it
+        // doesn't have to wait for _yet another_ gitlab call
         {
             let mut writer = self.metadata_cache.write();
             writer.insert(key.into_owned(), Arc::clone(&metadata));
@@ -192,22 +238,37 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         Ok(metadata)
     }
 
+    // Builds the packfile for the current connection, and caches it in case
+    // this function is called again (ie. the client calling `ls-ref`s before
+    // `fetch` will result in two calls). The output isn't deterministic because
+    // the datetime is included in the commit causing the hash to change, by
+    // caching we ensure that:
+    //
+    //   1. the client receives the expected refs when calling `fetch`,
+    //   2. we don't do the relatively expensive processing that comes with
+    //      generating the packfile more than once per connection.
     async fn build_packfile(&mut self) -> anyhow::Result<Arc<(HashOutput, Vec<PackFileEntry>)>> {
+        // return the cached value if we've generated the packfile for
+        // this connection already
         if let Some(packfile_cache) = &self.packfile_cache {
             return Ok(packfile_cache.clone());
         }
 
+        // create the high-level packfile generator
         let mut packfile = GitRepository::default();
 
         let user = self.user()?;
         let group = self.group()?;
 
+        // fetch the impersonation token for the user we'll embed
+        // the `dl` string.
         let token = self.gitlab.fetch_token_for_user(user).await?;
 
-        let config_json = Bytes::from(format!(
-            "{{\"dl\": \"{}\"}}",
-            self.gitlab.cargo_dl_uri(group, &token)
-        ));
+        // generate the config for the user, containing the download
+        // url template from gitlab and the impersonation token embedded
+        let config_json = Bytes::from(serde_json::to_vec(&CargoConfig {
+            dl: self.gitlab.cargo_dl_uri(group, &token),
+        })?);
 
         // write config.json to the root of the repo
         packfile.insert(vec![], "config.json".to_string(), config_json)?;
@@ -215,6 +276,8 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // fetch the releases for every project within the given group
         let releases_by_crate = self.fetch_releases_by_crate().await?;
 
+        // a reusable buffer for writing the metadata json blobs out to
+        // for each package
         let mut buffer = BytesMut::new();
 
         for ((crate_path, crate_name), releases) in &releases_by_crate {
@@ -228,10 +291,13 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
                     .fetch_metadata(crate_path, checksum, crate_name, version)
                     .await?;
 
-                buffer.extend_from_slice(&serde_json::to_vec(&*meta).unwrap());
+                // each crates file in the index is a metadata blob for
+                // each version separated by a newline
+                buffer.extend_from_slice(&serde_json::to_vec(&*meta)?);
                 buffer.put_u8(b'\n');
             }
 
+            // insert the crate version metadata into the packfile
             packfile.insert(
                 get_crate_folder(crate_name),
                 crate_name.to_string(),
@@ -239,12 +305,16 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             )?;
         }
 
+        // build a commit for all of our inserted files and build
+        // into its lower-level `Vec<PackFileEntry>` counter-part.
         let packfile = Arc::new(packfile.commit(
-            "test".to_string(),
-            "test@test.com".to_string(),
-            "test".to_string(),
+            env!("CARGO_PKG_NAME"),
+            "noreply@chart.rs",
+            "Latest crates from GitLab",
         )?);
 
+        // cache the built packfile for the next time this
+        // function is called from this connection
         self.packfile_cache = Some(Arc::clone(&packfile));
 
         Ok(packfile)
@@ -280,11 +350,18 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
         let user = user.to_string();
 
         Box::pin(capture_errors(async move {
+            // username:password combo is used by CI to authenticate to us,
+            // it does not allow users to authenticate directly. it's
+            // technically the SSH username that contains both the username
+            // and password as we don't want an interactive prompt or
+            // anything like that
             let mut user = self
                 .gitlab
                 .find_user_by_username_password_combo(&user)
                 .await?;
 
+            // if there was no username:password combo given we'll lookup
+            // the user by the SSH key they're connecting to us with
             if user.is_none() {
                 user = self
                     .gitlab
@@ -305,7 +382,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
         self.input_bytes.extend_from_slice(data);
 
         Box::pin(capture_errors(async move {
-            // start building the packfile we're going to send to the user
+            // build the packfile we're going to send to the user
             let (commit_hash, packfile_entries) = &*self.build_packfile().await?;
 
             while let Some(frame) = self.codec.decode(&mut self.input_bytes)? {
