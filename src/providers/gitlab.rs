@@ -9,6 +9,7 @@ use reqwest::header;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
+use tracing::Instrument;
 
 pub struct Gitlab {
     client: reqwest::Client,
@@ -158,54 +159,58 @@ impl super::PackageProvider for Gitlab {
             for release in res {
                 let this = self.clone();
 
-                futures.push(tokio::spawn(async move {
-                    let (project, package) = {
-                        let mut splitter = release.links.web_path.splitn(2, "/-/packages/");
-                        match (splitter.next(), splitter.next()) {
-                            (Some(project), Some(package)) => (&project[1..], package),
-                            _ => return Ok(None),
-                        }
-                    };
+                futures.push(tokio::spawn(
+                    async move {
+                        let (project, package) = {
+                            let mut splitter = release.links.web_path.splitn(2, "/-/packages/");
+                            match (splitter.next(), splitter.next()) {
+                                (Some(project), Some(package)) => (&project[1..], package),
+                                _ => return Ok(None),
+                            }
+                        };
 
-                    let package_path = Arc::new(GitlabCratePath {
-                        project: utf8_percent_encode(project, NON_ALPHANUMERIC).to_string(),
-                        package_name: utf8_percent_encode(&release.name, NON_ALPHANUMERIC)
-                            .to_string(),
-                    });
+                        let package_path = Arc::new(GitlabCratePath {
+                            project: utf8_percent_encode(project, NON_ALPHANUMERIC).to_string(),
+                            package_name: utf8_percent_encode(&release.name, NON_ALPHANUMERIC)
+                                .to_string(),
+                        });
 
-                    let package_files: Vec<GitlabPackageFilesResponse> = handle_error(
-                        this.client
-                            .get(format!(
-                                "{}/projects/{}/packages/{}/package_files",
-                                this.base_url,
-                                utf8_percent_encode(project, NON_ALPHANUMERIC),
-                                utf8_percent_encode(package, NON_ALPHANUMERIC),
-                            ))
-                            .send()
-                            .await?,
-                    )
-                    .await?
-                    .json()
-                    .await?;
+                        let package_files: Vec<GitlabPackageFilesResponse> = handle_error(
+                            this.client
+                                .get(format!(
+                                    "{}/projects/{}/packages/{}/package_files",
+                                    this.base_url,
+                                    utf8_percent_encode(project, NON_ALPHANUMERIC),
+                                    utf8_percent_encode(package, NON_ALPHANUMERIC),
+                                ))
+                                .send()
+                                .await?,
+                        )
+                        .await?
+                        .json()
+                        .await?;
 
-                    let expected_file_name = format!("{}-{}.crate", release.name, release.version);
+                        let expected_file_name =
+                            format!("{}-{}.crate", release.name, release.version);
 
-                    Ok::<_, anyhow::Error>(
-                        package_files
-                            .into_iter()
-                            .find(|package_file| package_file.file_name == expected_file_name)
-                            .map(move |package_file| {
-                                (
-                                    Arc::clone(&package_path),
-                                    Release {
-                                        name: release.name,
-                                        version: release.version,
-                                        checksum: package_file.file_sha256,
-                                    },
-                                )
-                            }),
-                    )
-                }));
+                        Ok::<_, anyhow::Error>(
+                            package_files
+                                .into_iter()
+                                .find(|package_file| package_file.file_name == expected_file_name)
+                                .map(move |package_file| {
+                                    (
+                                        Arc::clone(&package_path),
+                                        Release {
+                                            name: release.name,
+                                            version: release.version,
+                                            checksum: package_file.file_sha256,
+                                        },
+                                    )
+                                }),
+                        )
+                    }
+                    .in_current_span(),
+                ));
             }
         }
 
