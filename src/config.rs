@@ -2,7 +2,7 @@
 
 use clap::Parser;
 use serde::{de::DeserializeOwned, Deserialize};
-use std::path::PathBuf;
+use std::{path::PathBuf, net::SocketAddr};
 use url::Url;
 
 #[derive(Parser)]
@@ -15,6 +15,7 @@ pub struct Args {
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    pub listen_address: SocketAddr,
     pub state_directory: PathBuf,
     pub gitlab: GitlabConfig,
 }

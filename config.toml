@@ -1,3 +1,6 @@
+# socket address for the SSH server to listen on
+listen-address = "[::]:2222"
+
 # directory in which the generated private keys for the server
 # should be stored
 state-directory = "/var/lib/gitlab-cargo-shim"

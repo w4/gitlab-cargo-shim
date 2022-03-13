@@ -97,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
 
     thrussh::server::run(
         thrussh_config,
-        "127.0.0.1:2210",
+        &args.config.listen_address.to_string(),
         Server {
             gitlab,
             metadata_cache: MetadataCache::default(),
