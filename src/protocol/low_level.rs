@@ -143,6 +143,7 @@ pub struct TreeItem {
     pub kind: TreeItemKind,
     pub name: String,
     pub hash: HashOutput,
+    pub sort_name: String,
 }
 
 // `[mode] [name]\0[hash]`

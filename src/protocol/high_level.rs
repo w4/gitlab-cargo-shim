@@ -132,11 +132,13 @@ impl Tree {
             tree.push(match *item {
                 TreeItem::Blob(hash) => LowLevelTreeItem {
                     kind: TreeItemKind::File,
+                    sort_name: name.clone(),
                     name,
                     hash,
                 },
                 TreeItem::Tree(tree) => LowLevelTreeItem {
                     kind: TreeItemKind::Directory,
+                    sort_name: format!("{}/", name),
                     name,
                     // we're essentially working through our tree from the bottom up,
                     // so we can grab the hash of each directory along the way and
@@ -145,6 +147,11 @@ impl Tree {
                 },
             });
         }
+
+        // we need to sort our tree alphabetically, otherwise Git will silently
+        // stop parsing the rest of the tree once it comes across a non-sorted
+        // tree entry.
+        tree.sort_unstable_by(|a, b| a.sort_name.cmp(&b.sort_name));
 
         // gets the hash of the tree we've just worked on, and
         // pushes it to the packfile

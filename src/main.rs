@@ -24,6 +24,7 @@ use anyhow::anyhow;
 use bytes::{BufMut, Bytes, BytesMut};
 use clap::Parser;
 use futures::Future;
+use indexmap::IndexMap;
 use parking_lot::RwLock;
 use std::{
     borrow::Cow, collections::HashMap, fmt::Write, net::SocketAddr, net::SocketAddrV6, pin::Pin,
@@ -35,7 +36,7 @@ use thrussh::{
 };
 use thrussh_keys::key::PublicKey;
 use tokio_util::{codec::Decoder, codec::Encoder as CodecEncoder};
-use tracing::{error, info, info_span, Instrument, Span};
+use tracing::{debug, error, info, info_span, Instrument, Span};
 use uuid::Uuid;
 
 const AGENT: &str = concat!(
@@ -110,6 +111,8 @@ type MetadataCache = Arc<RwLock<HashMap<MetadataCacheKey<'static>, Arc<CargoInde
 
 struct Server<U: UserProvider + PackageProvider + Send + Sync + 'static> {
     gitlab: Arc<U>,
+    // todo: we could make our commit hash stable by leaving an update time
+    //  in this cache and using that as our commit time
     metadata_cache: MetadataCache,
 }
 
@@ -184,11 +187,11 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     /// and groups them by crate.
     async fn fetch_releases_by_crate(
         &self,
-    ) -> anyhow::Result<HashMap<(U::CratePath, String), Vec<Release>>> {
+    ) -> anyhow::Result<IndexMap<(U::CratePath, String), Vec<Release>>> {
         let user = self.user()?;
         let group = self.group()?;
 
-        let mut res = HashMap::new();
+        let mut res = IndexMap::new();
 
         for (path, release) in Arc::clone(&self.gitlab)
             .fetch_releases_for_group(group, user)
@@ -296,6 +299,8 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             for release in releases {
                 let checksum = &release.checksum;
                 let version = &release.version;
+
+                debug!("Fetching metadata for {}-{}", crate_name, version);
 
                 // parses the `cargo metadata` stored in the release, which
                 // should be stored under `metadata.json`.
