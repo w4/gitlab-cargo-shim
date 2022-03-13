@@ -1,7 +1,12 @@
+use crate::util::ArcOrCowStr;
 use bytes::{BufMut, Bytes, BytesMut};
 use flate2::{write::ZlibEncoder, Compression};
 use sha1::Digest;
-use std::{convert::TryInto, fmt::Write, io::Write as IoWrite};
+use std::{
+    convert::TryInto,
+    fmt::{Display, Formatter, Write},
+    io::Write as IoWrite,
+};
 
 pub type HashOutput = [u8; 20];
 
@@ -73,8 +78,8 @@ impl Commit {
         out.extend_from_slice(&tree_hex);
         out.write_char('\n')?;
 
-        writeln!(out, "author {}", self.author.encode())?;
-        writeln!(out, "committer {}", self.committer.encode())?;
+        writeln!(out, "author {}", self.author)?;
+        writeln!(out, "committer {}", self.committer)?;
         write!(out, "\n{}", self.message)?;
 
         Ok(())
@@ -91,24 +96,26 @@ impl Commit {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct CommitUserInfo {
     pub name: &'static str,
     pub email: &'static str,
     pub time: time::OffsetDateTime,
 }
 
-impl CommitUserInfo {
-    fn encode(&self) -> String {
-        // TODO: remove `format!`, `format_args!`?
-        format!(
+impl Display for CommitUserInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
             "{} <{}> {} +0000",
             self.name,
             self.email,
             self.time.unix_timestamp()
         )
     }
+}
 
+impl CommitUserInfo {
     #[must_use]
     pub fn size(&self) -> usize {
         let timestamp_len = itoa::Buffer::new().format(self.time.unix_timestamp()).len();
@@ -138,10 +145,10 @@ impl TreeItemKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TreeItem {
     pub kind: TreeItemKind,
-    pub name: String,
+    pub name: ArcOrCowStr,
     pub hash: HashOutput,
     pub sort_name: String,
 }
@@ -161,7 +168,7 @@ impl TreeItem {
     }
 }
 
-#[derive(Debug, Clone)] // could be copy but Vec<TreeItem<'a>>
+#[derive(Debug)] // could be copy but Vec<TreeItem<'a>>
 pub enum PackFileEntry {
     // jordan@Jordans-MacBook-Pro-2 0d % printf "\x1f\x8b\x08\x00\x00\x00\x00\x00" | cat - f5/473259d9674ed66239766a013f96a3550374e3 | gzip -dc
     // commit 1068tree 0d586b48bc42e8591773d3d8a7223551c39d453c

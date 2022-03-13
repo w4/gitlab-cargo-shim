@@ -35,7 +35,7 @@ pub trait PackageProvider {
         version: &str,
     ) -> anyhow::Result<cargo_metadata::Metadata>;
 
-    fn cargo_dl_uri(&self, group: &Group, token: &str) -> String;
+    fn cargo_dl_uri(&self, group: &Group, token: &str) -> anyhow::Result<String>;
 }
 
 #[derive(Debug, Clone)]
@@ -50,9 +50,11 @@ pub struct Group {
     pub name: String,
 }
 
+pub type ReleaseName = Arc<str>;
+
 #[derive(Debug)]
 pub struct Release {
-    pub name: String,
+    pub name: ReleaseName,
     pub version: String,
     pub checksum: String,
 }

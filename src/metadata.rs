@@ -1,8 +1,10 @@
 #![allow(clippy::module_name_repetitions)]
 
-use cargo_metadata::Package;
+use cargo_metadata::{DependencyKind, Package};
+use cargo_platform::Platform;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 /// Transforms metadata from `cargo metadata` to the standard one-line JSON used in cargo registries.
 ///
@@ -20,21 +22,22 @@ pub fn transform(
 
     Some(CargoIndexCrateMetadata {
         name: package.name,
-        vers: package.version.to_string(),
+        vers: package.version,
         deps: package
             .dependencies
             .into_iter()
             .map(|v| CargoIndexCrateMetadataDependency {
                 name: v.name,
-                req: v.req.to_string(),
+                req: v.req,
                 features: v.features,
                 optional: v.optional,
                 default_features: v.uses_default_features,
-                target: v.target.map(|v| v.to_string()),
-                kind: v.kind.to_string(),
-                registry: Some(v.registry.unwrap_or_else(|| {
-                    "https://github.com/rust-lang/crates.io-index.git".to_string()
-                })),
+                target: v.target,
+                kind: v.kind,
+                registry: Some(v.registry.map_or(
+                    Cow::Borrowed("https://github.com/rust-lang/crates.io-index.git"),
+                    Cow::Owned,
+                )),
                 package: v.rename,
             })
             .collect(),
@@ -53,7 +56,7 @@ pub struct CargoConfig {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CargoIndexCrateMetadata {
     name: String,
-    vers: String,
+    vers: Version,
     deps: Vec<CargoIndexCrateMetadataDependency>,
     cksum: String,
     features: HashMap<String, Vec<String>>,
@@ -64,12 +67,12 @@ pub struct CargoIndexCrateMetadata {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CargoIndexCrateMetadataDependency {
     name: String,
-    req: String,
+    req: VersionReq,
     features: Vec<String>,
     optional: bool,
     default_features: bool,
-    target: Option<String>,
-    kind: String,
-    registry: Option<String>,
+    target: Option<Platform>,
+    kind: DependencyKind,
+    registry: Option<Cow<'static, str>>,
     package: Option<String>,
 }

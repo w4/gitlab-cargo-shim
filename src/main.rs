@@ -17,7 +17,7 @@ use crate::{
         low_level::{HashOutput, PackFileEntry},
         packet_line::PktLine,
     },
-    providers::{gitlab::Gitlab, Group, PackageProvider, Release, User, UserProvider},
+    providers::{gitlab::Gitlab, Group, PackageProvider, Release, ReleaseName, User, UserProvider},
     util::get_crate_folder,
 };
 use anyhow::anyhow;
@@ -147,7 +147,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
 pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
     codec: GitCodec,
     gitlab: Arc<U>,
-    user: Option<User>,
+    user: Option<Arc<User>>,
     group: Option<Group>,
     // fetcher_future: Option<JoinHandle<anyhow::Result<Vec<Release>>>>,
     input_bytes: BytesMut,
@@ -161,7 +161,7 @@ pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
 }
 
 impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
-    fn user(&self) -> anyhow::Result<&User> {
+    fn user(&self) -> anyhow::Result<&Arc<User>> {
         self.user.as_ref().ok_or(anyhow::anyhow!("no user set"))
     }
 
@@ -187,7 +187,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     /// and groups them by crate.
     async fn fetch_releases_by_crate(
         &self,
-    ) -> anyhow::Result<IndexMap<(U::CratePath, String), Vec<Release>>> {
+    ) -> anyhow::Result<IndexMap<(U::CratePath, ReleaseName), Vec<Release>>> {
         let user = self.user()?;
         let group = self.group()?;
 
@@ -197,7 +197,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             .fetch_releases_for_group(group, user)
             .await?
         {
-            res.entry((path, release.name.clone()))
+            res.entry((path, Arc::clone(&release.name)))
                 .or_insert_with(Vec::new)
                 .push(release);
         }
@@ -266,7 +266,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // return the cached value if we've generated the packfile for
         // this connection already
         if let Some(packfile_cache) = &self.packfile_cache {
-            return Ok(packfile_cache.clone());
+            return Ok(Arc::clone(packfile_cache));
         }
 
         // create the high-level packfile generator
@@ -282,11 +282,11 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // generate the config for the user, containing the download
         // url template from gitlab and the impersonation token embedded
         let config_json = Bytes::from(serde_json::to_vec(&CargoConfig {
-            dl: self.gitlab.cargo_dl_uri(group, &token),
+            dl: self.gitlab.cargo_dl_uri(group, &token)?,
         })?);
 
         // write config.json to the root of the repo
-        packfile.insert(vec![], "config.json".to_string(), config_json)?;
+        packfile.insert(&[], "config.json".into(), config_json)?;
 
         // fetch the releases for every project within the given group
         let releases_by_crate = self.fetch_releases_by_crate().await?;
@@ -316,8 +316,8 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
             // insert the crate version metadata into the packfile
             packfile.insert(
-                get_crate_folder(crate_name),
-                crate_name.to_string(),
+                &get_crate_folder(crate_name),
+                Arc::clone(crate_name).into(),
                 buffer.split().freeze(),
             )?;
         }
@@ -396,7 +396,7 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
                         &user.username,
                         if by_ssh_key { "SSH Key" } else { "Build Token" },
                     );
-                    self.user = Some(user);
+                    self.user = Some(Arc::new(user));
                     self.finished_auth(Auth::Accept).await
                 } else {
                     info!("Public key rejected");
@@ -481,11 +481,11 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
         let span = info_span!(parent: &self.span, "shell_request");
 
         Box::pin(capture_errors(async move {
-            let username = self.user()?.username.clone();
+            let user = Arc::clone(self.user()?);
             write!(
                 &mut self.output_bytes,
                 "Hi there, {}! You've successfully authenticated, but {} does not provide shell access.\r\n",
-                username,
+                user.username,
                 env!("CARGO_PKG_NAME")
             )?;
             info!("Shell requested, dropping connection");

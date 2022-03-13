@@ -3,6 +3,7 @@
 use clap::Parser;
 use serde::{de::DeserializeOwned, Deserialize};
 use std::path::PathBuf;
+use url::Url;
 
 #[derive(Parser)]
 #[clap(version = clap::crate_version!(), author = clap::crate_authors!())]
@@ -21,7 +22,7 @@ pub struct Config {
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct GitlabConfig {
-    pub uri: String,
+    pub uri: Url,
     pub admin_token: String,
 }
 

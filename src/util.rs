@@ -1,3 +1,12 @@
+use arrayvec::ArrayVec;
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Display, Formatter},
+    ops::Deref,
+    sync::Arc,
+};
+use ustr::ustr;
+
 #[must_use]
 pub fn format_fingerprint(fingerprint: &str) -> String {
     format!("SHA256:{}", fingerprint)
@@ -5,22 +14,75 @@ pub fn format_fingerprint(fingerprint: &str) -> String {
 
 /// Crates with a total of 1, 2 or 3 characters in the same are written out to directories named
 /// 1, 2 or 3 respectively as per the cargo spec. Anything else we'll build out a normal tree for
-/// using the frist four characters of the crate name, 2 for the first directory and the other 2
+/// using the first four characters of the crate name, 2 for the first directory and the other 2
 /// for the second.
 #[must_use]
-pub fn get_crate_folder(crate_name: &str) -> Vec<String> {
-    let mut folders = Vec::new();
+pub fn get_crate_folder(crate_name: &str) -> ArrayVec<&'static str, 2> {
+    let mut folders = ArrayVec::new();
 
     match crate_name.len() {
         0 => {}
-        1 => folders.push("1".to_string()),
-        2 => folders.push("2".to_string()),
-        3 => folders.push("3".to_string()),
+        1 => folders.push("1"),
+        2 => folders.push("2"),
+        3 => folders.push("3"),
         _ => {
-            folders.push(crate_name[..2].to_string());
-            folders.push(crate_name[2..4].to_string());
+            folders.push(ustr(&crate_name[..2]).as_str());
+            folders.push(ustr(&crate_name[2..4]).as_str());
         }
     }
 
     folders
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub enum ArcOrCowStr {
+    Arc(Arc<str>),
+    Cow(Cow<'static, str>),
+}
+
+impl From<Arc<str>> for ArcOrCowStr {
+    fn from(v: Arc<str>) -> Self {
+        Self::Arc(v)
+    }
+}
+
+impl From<Cow<'static, str>> for ArcOrCowStr {
+    fn from(v: Cow<'static, str>) -> Self {
+        Self::Cow(v)
+    }
+}
+
+impl From<&'static str> for ArcOrCowStr {
+    fn from(v: &'static str) -> Self {
+        Self::Cow(Cow::Borrowed(v))
+    }
+}
+
+impl From<String> for ArcOrCowStr {
+    fn from(v: String) -> Self {
+        Self::Cow(Cow::Owned(v))
+    }
+}
+
+impl AsRef<str> for ArcOrCowStr {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Arc(v) => v.as_ref(),
+            Self::Cow(v) => v.as_ref(),
+        }
+    }
+}
+
+impl Deref for ArcOrCowStr {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl Display for ArcOrCowStr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&**self, f)
+    }
 }

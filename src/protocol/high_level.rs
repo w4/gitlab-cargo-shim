@@ -6,6 +6,7 @@
 //! for our purposes because `cargo` will `git pull --force` from our Git
 //! server, allowing us to ignore any history the client may have.
 
+use crate::util::ArcOrCowStr;
 use bytes::Bytes;
 use indexmap::IndexMap;
 
@@ -34,8 +35,8 @@ impl GitRepository {
     /// and a `file` of `"my-file"`.
     pub fn insert(
         &mut self,
-        path: Vec<String>,
-        file: String,
+        path: &[&'static str],
+        file: ArcOrCowStr,
         content: Bytes,
     ) -> Result<(), anyhow::Error> {
         // we'll initialise the directory to the root of the tree, this means
@@ -48,7 +49,7 @@ impl GitRepository {
         for part in path {
             let tree_item = directory
                 .0
-                .entry(part)
+                .entry((*part).into())
                 .or_insert_with(|| Box::new(TreeItem::Tree(Tree::default())));
 
             if let TreeItem::Tree(d) = tree_item.as_mut() {
@@ -98,7 +99,7 @@ impl GitRepository {
 
         let commit = PackFileEntry::Commit(Commit {
             tree: tree_hash,
-            author: commit_user.clone(),
+            author: commit_user,
             committer: commit_user,
             message,
         });
@@ -116,7 +117,7 @@ impl GitRepository {
 
 /// An in-progress tree builder, containing file hashes along with their names or nested trees
 #[derive(Default, Debug)]
-struct Tree(IndexMap<String, Box<TreeItem>>);
+struct Tree(IndexMap<ArcOrCowStr, Box<TreeItem>>);
 
 impl Tree {
     /// Recursively writes the the whole tree out to the given `pack_file`,
@@ -132,7 +133,7 @@ impl Tree {
             tree.push(match *item {
                 TreeItem::Blob(hash) => LowLevelTreeItem {
                     kind: TreeItemKind::File,
-                    sort_name: name.clone(),
+                    sort_name: name.to_string(),
                     name,
                     hash,
                 },

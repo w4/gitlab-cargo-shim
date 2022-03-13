@@ -43,7 +43,7 @@ before_script:
 
 To release your package from CI, add a new pipeline step:
 
-```
+```yaml
 stage:
   - release-crate
 

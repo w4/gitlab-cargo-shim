@@ -7,13 +7,13 @@ use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 use tracing::Instrument;
+use url::Url;
 
 pub struct Gitlab {
     client: reqwest::Client,
-    base_url: String,
+    base_url: Url,
 }
 
 impl Gitlab {
@@ -28,7 +28,7 @@ impl Gitlab {
             client: reqwest::ClientBuilder::new()
                 .default_headers(headers)
                 .build()?,
-            base_url: format!("{}/api/v4", config.uri),
+            base_url: config.uri.join("api/v4/")?,
         })
     }
 }
@@ -48,7 +48,7 @@ impl super::UserProvider for Gitlab {
         if username == "gitlab-ci-token" {
             let res: GitlabJobResponse = handle_error(
                 self.client
-                    .get(format!("{}/job", self.base_url))
+                    .get(self.base_url.join("job/")?)
                     .header("JOB-TOKEN", password)
                     .send()
                     .await?,
@@ -67,19 +67,14 @@ impl super::UserProvider for Gitlab {
     }
 
     async fn find_user_by_ssh_key(&self, fingerprint: &str) -> anyhow::Result<Option<User>> {
-        let res: GitlabSshKeyLookupResponse = handle_error(
-            self.client
-                .get(format!(
-                    "{}/keys?fingerprint={}",
-                    self.base_url,
-                    utf8_percent_encode(fingerprint, NON_ALPHANUMERIC)
-                ))
-                .send()
-                .await?,
-        )
-        .await?
-        .json()
-        .await?;
+        let mut url = self.base_url.join("keys")?;
+        url.query_pairs_mut()
+            .append_pair("fingerprint", fingerprint);
+
+        let res: GitlabSshKeyLookupResponse = handle_error(self.client.get(url).send().await?)
+            .await?
+            .json()
+            .await?;
         Ok(res.user.map(|u| User {
             id: u.id,
             username: u.username,
@@ -89,10 +84,10 @@ impl super::UserProvider for Gitlab {
     async fn fetch_token_for_user(&self, user: &User) -> anyhow::Result<String> {
         let impersonation_token: GitlabImpersonationTokenResponse = handle_error(
             self.client
-                .post(format!(
-                    "{}/users/{}/impersonation_tokens",
-                    self.base_url, user.id
-                ))
+                .post(
+                    self.base_url
+                        .join(&format!("users/{}/impersonation_tokens", user.id))?,
+                )
                 .json(&GitlabImpersonationTokenRequest {
                     name: env!("CARGO_PKG_NAME"),
                     scopes: vec!["api"],
@@ -113,14 +108,14 @@ impl super::PackageProvider for Gitlab {
     type CratePath = Arc<GitlabCratePath>;
 
     async fn fetch_group(self: Arc<Self>, group: &str, do_as: &User) -> anyhow::Result<Group> {
-        let uri = format!(
-            "{}/groups/{}?sudo={}",
-            self.base_url,
-            utf8_percent_encode(group, NON_ALPHANUMERIC),
-            do_as.id
-        );
+        let mut url = self
+            .base_url
+            .join("groups/")?
+            .join(&utf8_percent_encode(group, NON_ALPHANUMERIC).to_string())?;
+        url.query_pairs_mut()
+            .append_pair("sudo", itoa::Buffer::new().format(do_as.id));
 
-        let req = handle_error(self.client.get(uri).send().await?)
+        let req = handle_error(self.client.get(url).send().await?)
             .await?
             .json::<GitlabGroupResponse>()
             .await?
@@ -134,12 +129,19 @@ impl super::PackageProvider for Gitlab {
         group: &Group,
         do_as: &User,
     ) -> anyhow::Result<Vec<(Self::CratePath, Release)>> {
-        let mut next_uri = Some(format!(
-            "{}/groups/{}/packages?per_page=100&pagination=keyset&sort=asc&sudo={}",
-            self.base_url,
-            utf8_percent_encode(&group.name, NON_ALPHANUMERIC),
-            do_as.id
-        ));
+        let mut next_uri = Some({
+            let mut uri = self
+                .base_url
+                .join(&format!("groups/{}/packages", group.id,))?;
+            {
+                let mut query = uri.query_pairs_mut();
+                query.append_pair("per_page", itoa::Buffer::new().format(100u16));
+                query.append_pair("pagination", "keyset");
+                query.append_pair("sort", "asc");
+                query.append_pair("sudo", itoa::Buffer::new().format(do_as.id));
+            }
+            uri
+        });
 
         let futures = FuturesUnordered::new();
 
@@ -150,14 +152,14 @@ impl super::PackageProvider for Gitlab {
                 let mut link_header = parse_link_header::parse_with_rel(link_header.to_str()?)?;
 
                 if let Some(next) = link_header.remove("next") {
-                    next_uri = Some(next.raw_uri);
+                    next_uri = Some(next.raw_uri.parse()?);
                 }
             }
 
             let res: Vec<GitlabPackageResponse> = res.json().await?;
 
             for release in res {
-                let this = self.clone();
+                let this = Arc::clone(&self);
 
                 futures.push(tokio::spawn(
                     async move {
@@ -201,7 +203,7 @@ impl super::PackageProvider for Gitlab {
                                     (
                                         Arc::clone(&package_path),
                                         Release {
-                                            name: release.name,
+                                            name: Arc::from(release.name),
                                             version: release.version,
                                             checksum: package_file.file_sha256,
                                         },
@@ -226,7 +228,7 @@ impl super::PackageProvider for Gitlab {
         path: &Self::CratePath,
         version: &str,
     ) -> anyhow::Result<cargo_metadata::Metadata> {
-        let uri = format!("{}{}", self.base_url, path.metadata_uri(version),);
+        let uri = self.base_url.join(&path.metadata_uri(version))?;
 
         Ok(handle_error(self.client.get(uri).send().await?)
             .await?
@@ -234,12 +236,12 @@ impl super::PackageProvider for Gitlab {
             .await?)
     }
 
-    fn cargo_dl_uri(&self, group: &Group, token: &str) -> String {
-        format!(
-            "{}/groups/{}/packages/generic/{{sha256-checksum}}/{{crate}}-{{version}}.crate?private_token={token}",
-            self.base_url,
-            group.id,
-        )
+    fn cargo_dl_uri(&self, group: &Group, token: &str) -> anyhow::Result<String> {
+        let uri = self
+            .base_url
+            .join("groups/")?
+            .join(&format!("{}/", group.id))?;
+        Ok(format!("{uri}packages/generic/{{sha256-checksum}}/{{crate}}-{{version}}.crate?private_token={token}"))
     }
 }
 
@@ -287,7 +289,7 @@ impl GitlabCratePath {
     #[must_use]
     pub fn metadata_uri(&self, version: &str) -> String {
         format!(
-            "/projects/{}/packages/generic/{}/{version}/metadata.json",
+            "projects/{}/packages/generic/{}/{version}/metadata.json",
             self.project, self.package_name
         )
     }
