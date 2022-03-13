@@ -47,7 +47,9 @@ impl super::UserProvider for Gitlab {
 
         if username == "gitlab-ci-token" {
             let res: GitlabJobResponse = handle_error(
-                self.client
+                // we're purposely not using `self.client` here as we don't
+                // want to use our admin token for this request
+                reqwest::Client::new()
                     .get(self.base_url.join("job/")?)
                     .header("JOB-TOKEN", password)
                     .send()

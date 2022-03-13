@@ -2,7 +2,7 @@
 
 use clap::Parser;
 use serde::{de::DeserializeOwned, Deserialize};
-use std::{path::PathBuf, net::SocketAddr};
+use std::{net::SocketAddr, path::PathBuf};
 use url::Url;
 
 #[derive(Parser)]
