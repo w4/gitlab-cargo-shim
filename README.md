@@ -1,5 +1,8 @@
 # gitlab-cargo-shim
 
+To use `github-cargo-shim` at the moment you will have to apply [this patch][patch] ([MR][MR])
+to your GitLab instance.
+
 Say goodbye to your Git dependencies, `gitlab-cargo-shim` is an SSH server
 that serves crates just like a standard Cargo registry but from a
 [GitLab package registry][gitlab-package-registry], allowing you to use
@@ -66,3 +69,5 @@ Rustacean.
 [gitlab-package-registry]: https://docs.gitlab.com/ee/user/packages/package_registry/index.html
 [imp-token]: https://docs.gitlab.com/ee/api/index.html#impersonation-tokens
 [envvar]: https://doc.rust-lang.org/cargo/reference/registries.html#using-an-alternate-registry
+[patch]: https://gitlab.com/gitlab-org/gitlab/-/merge_requests/82663.patch
+[MR]: https://gitlab.com/gitlab-org/gitlab/-/merge_requests/82663
