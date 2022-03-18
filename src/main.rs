@@ -10,7 +10,7 @@ pub mod util;
 
 use crate::{
     config::Args,
-    metadata::{CargoConfig, CargoIndexCrateMetadata},
+    metadata::{CargoIndexCrateMetadata, CargoIndexCrateMetadataWithDlOverride},
     protocol::{
         codec::{Encoder, GitCodec},
         high_level::GitRepository,
@@ -162,11 +162,11 @@ pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
 
 impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     fn user(&self) -> anyhow::Result<&Arc<User>> {
-        self.user.as_ref().ok_or(anyhow::anyhow!("no user set"))
+        self.user.as_ref().ok_or_else(|| anyhow::anyhow!("no user set"))
     }
 
     fn group(&self) -> anyhow::Result<&Group> {
-        self.group.as_ref().ok_or(anyhow::anyhow!("no group set"))
+        self.group.as_ref().ok_or_else(|| anyhow::anyhow!("no group set"))
     }
 
     /// Writes a Git packet line response to the buffer, this should only
@@ -272,18 +272,13 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // create the high-level packfile generator
         let mut packfile = GitRepository::default();
 
-        let user = self.user()?;
-        let group = self.group()?;
-
         // fetch the impersonation token for the user we'll embed
         // the `dl` string.
-        let token = self.gitlab.fetch_token_for_user(user).await?;
+        let token = self.gitlab.fetch_token_for_user(self.user()?).await?;
 
         // generate the config for the user, containing the download
         // url template from gitlab and the impersonation token embedded
-        let config_json = Bytes::from(serde_json::to_vec(&CargoConfig {
-            dl: self.gitlab.cargo_dl_uri(group, &token)?,
-        })?);
+        let config_json = Bytes::from_static(b"{}");
 
         // write config.json to the root of the repo
         packfile.insert(&[], "config.json".into(), config_json)?;
@@ -310,7 +305,12 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
                 // each crates file in the index is a metadata blob for
                 // each version separated by a newline
-                buffer.extend_from_slice(&serde_json::to_vec(&*meta)?);
+                buffer.extend_from_slice(&serde_json::to_vec(
+                    &CargoIndexCrateMetadataWithDlOverride {
+                        meta: &meta,
+                        dl: &self.gitlab.cargo_dl_uri(crate_path, version, &token)?,
+                    },
+                )?);
                 buffer.put_u8(b'\n');
             }
 

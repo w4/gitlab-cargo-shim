@@ -238,12 +238,20 @@ impl super::PackageProvider for Gitlab {
             .await?)
     }
 
-    fn cargo_dl_uri(&self, group: &Group, token: &str) -> anyhow::Result<String> {
-        let uri = self
-            .base_url
-            .join("groups/")?
-            .join(&format!("{}/", group.id))?;
-        Ok(format!("{uri}packages/generic/{{sha256-checksum}}/{{crate}}-{{version}}.crate?private_token={token}"))
+    fn cargo_dl_uri(
+        &self,
+        path: &Self::CratePath,
+        version: &str,
+        token: &str,
+    ) -> anyhow::Result<String> {
+        Ok(format!(
+            "{uri}projects/{project}/packages/generic/{crate_name}/{version}/{crate_name}-{version}.crate?private_token={token}",
+            uri = self.base_url,
+            project = path.project,
+            crate_name = path.package_name,
+            version = version,
+            token = token,
+        ))
     }
 }
 
