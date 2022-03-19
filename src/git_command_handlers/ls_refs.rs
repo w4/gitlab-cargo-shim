@@ -6,12 +6,14 @@
 
 use bytes::Bytes;
 use thrussh::{server::Session, ChannelId};
+use tracing::instrument;
 
 use crate::{
     protocol::{low_level::HashOutput, packet_line::PktLine},
     Handler, PackageProvider, UserProvider,
 };
 
+#[instrument(skip(handle, session, channel, _metadata, commit_hash), err)]
 pub fn handle<U: UserProvider + PackageProvider + Send + Sync + 'static>(
     handle: &mut Handler<U>,
     session: &mut Session,

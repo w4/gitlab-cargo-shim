@@ -2,6 +2,7 @@
 
 use bytes::{Buf, Bytes, BytesMut};
 use tokio_util::codec;
+use tracing::instrument;
 
 use super::packet_line::PktLine;
 
@@ -31,6 +32,7 @@ impl codec::Decoder for GitCodec {
     type Item = GitCommand;
     type Error = anyhow::Error;
 
+    #[instrument(skip(self, src), err)]
     fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         loop {
             if src.len() < 4 {

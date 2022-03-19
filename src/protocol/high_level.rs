@@ -6,6 +6,7 @@
 //! for our purposes because `cargo` will `git pull --force` from our Git
 //! server, allowing us to ignore any history the client may have.
 
+use crate::instrument;
 use crate::util::ArcOrCowStr;
 use bytes::Bytes;
 use indexmap::IndexMap;
@@ -33,6 +34,7 @@ impl GitRepository {
     /// Inserts a file into the repository, writing a file to the path
     /// `path/to/my-file` would require a `path` of `["path", "to"]`
     /// and a `file` of `"my-file"`.
+    #[instrument(skip(self, file, content), err)]
     pub fn insert(
         &mut self,
         path: &[&'static str],
@@ -79,6 +81,7 @@ impl GitRepository {
     /// Finalises this `GitRepository` by writing a commit to the `packfile_entries`,
     /// all the files currently in the `tree`, returning all the packfile entries
     /// and also the commit hash so it can be referred to by `ls-ref`s.
+    #[instrument(skip(self, name, email, message), err)]
     pub fn commit(
         mut self,
         name: &'static str,
@@ -123,6 +126,7 @@ impl Tree {
     /// Recursively writes the the whole tree out to the given `pack_file`,
     /// the tree contains pointers to (hashes of) files contained within a
     /// directory, and pointers to other directories.
+    #[instrument(skip(self, pack_file), err)]
     fn into_packfile_entries(
         self,
         pack_file: &mut IndexMap<HashOutput, PackFileEntry>,

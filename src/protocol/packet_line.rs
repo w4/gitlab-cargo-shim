@@ -1,5 +1,6 @@
 use bytes::{BufMut, BytesMut};
 use std::fmt::Write;
+use tracing::instrument;
 
 use super::low_level::PackFile;
 
@@ -18,6 +19,7 @@ pub enum PktLine<'a> {
 }
 
 impl PktLine<'_> {
+    #[instrument(skip(self, buf), err)]
     pub fn encode_to(&self, buf: &mut BytesMut) -> Result<(), anyhow::Error> {
         match self {
             Self::Data(data) => {

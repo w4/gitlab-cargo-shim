@@ -7,6 +7,7 @@ use std::{
     fmt::{Display, Formatter, Write},
     io::Write as IoWrite,
 };
+use tracing::instrument;
 
 pub type HashOutput = [u8; 20];
 
@@ -36,6 +37,7 @@ impl<'a> PackFile<'a> {
         20
     }
 
+    #[instrument(skip(self, original_buf), err)]
     pub fn encode_to(&self, original_buf: &mut BytesMut) -> Result<(), anyhow::Error> {
         let mut buf = original_buf.split_off(original_buf.len());
         buf.reserve(Self::header_size() + Self::footer_size());
@@ -70,6 +72,7 @@ pub struct Commit {
 }
 
 impl Commit {
+    #[instrument(skip(self, out), err)]
     fn encode_to(&self, out: &mut BytesMut) -> Result<(), anyhow::Error> {
         let mut tree_hex = [0_u8; 20 * 2];
         hex::encode_to_slice(self.tree, &mut tree_hex)?;
@@ -155,6 +158,7 @@ pub struct TreeItem {
 
 // `[mode] [name]\0[hash]`
 impl TreeItem {
+    #[instrument(skip(self, out), err)]
     fn encode_to(&self, out: &mut BytesMut) -> Result<(), anyhow::Error> {
         out.write_str(self.kind.mode())?;
         write!(out, " {}\0", self.name)?;
@@ -207,6 +211,7 @@ pub enum PackFileEntry {
 }
 
 impl PackFileEntry {
+    #[instrument(skip(self, buf))]
     fn write_header(&self, buf: &mut BytesMut) {
         let mut size = self.uncompressed_size();
 
@@ -250,6 +255,7 @@ impl PackFileEntry {
         }
     }
 
+    #[instrument(skip(self, original_out), err)]
     pub fn encode_to(&self, original_out: &mut BytesMut) -> Result<(), anyhow::Error> {
         self.write_header(original_out); // TODO: this needs space reserving for it
 
@@ -287,6 +293,7 @@ impl PackFileEntry {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     #[must_use]
     pub fn uncompressed_size(&self) -> usize {
         match self {
@@ -297,6 +304,7 @@ impl PackFileEntry {
     }
 
     // wen const generics for RustCrypto? :-(
+    #[instrument(skip(self), err)]
     pub fn hash(&self) -> Result<HashOutput, anyhow::Error> {
         let size = self.uncompressed_size();
 

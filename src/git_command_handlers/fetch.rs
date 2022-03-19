@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use thrussh::{server::Session, ChannelId};
+use tracing::instrument;
 
 use crate::{
     protocol::{
@@ -9,6 +10,7 @@ use crate::{
     Handler, PackageProvider, UserProvider,
 };
 
+#[instrument(skip(handle, session, channel, metadata, packfile_entries), err)]
 pub fn handle<U: UserProvider + PackageProvider + Send + Sync + 'static>(
     handle: &mut Handler<U>,
     session: &mut Session,

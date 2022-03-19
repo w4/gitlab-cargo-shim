@@ -36,7 +36,7 @@ use thrussh::{
 };
 use thrussh_keys::key::PublicKey;
 use tokio_util::{codec::Decoder, codec::Encoder as CodecEncoder};
-use tracing::{debug, error, info, info_span, Instrument, Span};
+use tracing::{debug, error, info, info_span, instrument, Instrument, Span};
 use uuid::Uuid;
 
 const AGENT: &str = concat!(
@@ -49,7 +49,10 @@ const AGENT: &str = concat!(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let subscriber = tracing_subscriber::fmt();
+    #[cfg(debug_assertions)]
+    let subscriber = subscriber.pretty();
+    subscriber.init();
 
     let args: Args = Args::parse();
 
@@ -162,11 +165,15 @@ pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
 
 impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     fn user(&self) -> anyhow::Result<&Arc<User>> {
-        self.user.as_ref().ok_or_else(|| anyhow::anyhow!("no user set"))
+        self.user
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no user set"))
     }
 
     fn group(&self) -> anyhow::Result<&Group> {
-        self.group.as_ref().ok_or_else(|| anyhow::anyhow!("no group set"))
+        self.group
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no group set"))
     }
 
     /// Writes a Git packet line response to the buffer, this should only
@@ -185,6 +192,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
     /// Fetches all the releases from the provider for the given group
     /// and groups them by crate.
+    #[instrument(skip(self), err)]
     async fn fetch_releases_by_crate(
         &self,
     ) -> anyhow::Result<IndexMap<(U::CratePath, ReleaseName), Vec<Release>>> {
@@ -209,6 +217,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     /// globally cache-able since it's immutable, to get to this call
     /// the user must've already fetched the crate path from the provider
     /// and hence verified they have permission to read it.
+    #[instrument(skip(self), err)]
     async fn fetch_metadata(
         &self,
         path: &U::CratePath,
@@ -262,6 +271,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     //   1. the client receives the expected refs when calling `fetch`,
     //   2. we don't do the relatively expensive processing that comes with
     //      generating the packfile more than once per connection.
+    #[instrument(skip(self), err)]
     async fn build_packfile(&mut self) -> anyhow::Result<Arc<(HashOutput, Vec<PackFileEntry>)>> {
         // return the cached value if we've generated the packfile for
         // this connection already

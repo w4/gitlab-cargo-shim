@@ -8,7 +8,7 @@ use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::Arc};
-use tracing::Instrument;
+use tracing::{info_span, instrument, Instrument};
 use url::Url;
 
 pub struct Gitlab {
@@ -35,6 +35,7 @@ impl Gitlab {
 
 #[async_trait]
 impl super::UserProvider for Gitlab {
+    #[instrument(skip(self, username_password), err)]
     async fn find_user_by_username_password_combo(
         &self,
         username_password: &str,
@@ -68,6 +69,7 @@ impl super::UserProvider for Gitlab {
         }
     }
 
+    #[instrument(skip(self), err)]
     async fn find_user_by_ssh_key(&self, fingerprint: &str) -> anyhow::Result<Option<User>> {
         let mut url = self.base_url.join("keys")?;
         url.query_pairs_mut()
@@ -83,6 +85,7 @@ impl super::UserProvider for Gitlab {
         }))
     }
 
+    #[instrument(skip(self), err)]
     async fn fetch_token_for_user(&self, user: &User) -> anyhow::Result<String> {
         let impersonation_token: GitlabImpersonationTokenResponse = handle_error(
             self.client
@@ -109,7 +112,8 @@ impl super::UserProvider for Gitlab {
 impl super::PackageProvider for Gitlab {
     type CratePath = Arc<GitlabCratePath>;
 
-    async fn fetch_group(self: Arc<Self>, group: &str, do_as: &User) -> anyhow::Result<Group> {
+    #[instrument(skip(self), err)]
+    async fn fetch_group(&self, group: &str, do_as: &User) -> anyhow::Result<Group> {
         let mut url = self
             .base_url
             .join("groups/")?
@@ -126,6 +130,7 @@ impl super::PackageProvider for Gitlab {
         Ok(req)
     }
 
+    #[instrument(skip(self), err)]
     async fn fetch_releases_for_group(
         self: Arc<Self>,
         group: &Group,
@@ -213,7 +218,7 @@ impl super::PackageProvider for Gitlab {
                                 }),
                         )
                     }
-                    .in_current_span(),
+                    .instrument(info_span!("fetch_package_files")),
                 ));
             }
         }
@@ -225,8 +230,9 @@ impl super::PackageProvider for Gitlab {
             .await
     }
 
+    #[instrument(skip(self), err)]
     async fn fetch_metadata_for_release(
-        self: Arc<Self>,
+        &self,
         path: &Self::CratePath,
         version: &str,
     ) -> anyhow::Result<cargo_metadata::Metadata> {
