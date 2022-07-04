@@ -578,7 +578,7 @@ dependencies = [
  "indexmap",
  "indoc",
  "itoa",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "parse_link_header",
  "percent-encoding",
  "reqwest",
@@ -596,6 +596,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "urlencoding",
  "ustr",
  "uuid",
 ]
@@ -1029,9 +1030,9 @@ dependencies = [
 
 [[package]]
 name = "parking_lot"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87f5ec2493a61ac0506c0f4199f99070cbe83857b0337006a30f3e6719b8ef58"
+checksum = "3742b2c103b9f06bc9fff0a37ff4912935851bee6d36f3c02bcc755bcfec228f"
 dependencies = [
  "lock_api",
  "parking_lot_core 0.9.1",
@@ -1644,7 +1645,7 @@ dependencies = [
  "mio",
  "num_cpus",
  "once_cell",
- "parking_lot 0.12.0",
+ "parking_lot 0.12.1",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -1836,6 +1837,12 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68b90931029ab9b034b300b797048cf23723400aa757e8a2bfb9d748102f9821"
 
 [[package]]
 name = "ustr"
