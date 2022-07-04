@@ -10,14 +10,14 @@ pub mod util;
 
 use crate::{
     config::Args,
-    metadata::{CargoIndexCrateMetadata, CargoIndexCrateMetadataWithDlOverride},
+    metadata::{CargoConfig, CargoIndexCrateMetadata},
     protocol::{
         codec::{Encoder, GitCodec},
         high_level::GitRepository,
         low_level::{HashOutput, PackFileEntry},
         packet_line::PktLine,
     },
-    providers::{gitlab::Gitlab, Group, PackageProvider, Release, ReleaseName, User, UserProvider},
+    providers::{gitlab::Gitlab, PackageProvider, Release, ReleaseName, User, UserProvider},
     util::get_crate_folder,
 };
 use anyhow::anyhow;
@@ -136,7 +136,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
             codec: GitCodec::default(),
             gitlab: Arc::clone(&self.gitlab),
             user: None,
-            group: None,
+            project: None,
             input_bytes: BytesMut::new(),
             output_bytes: BytesMut::new(),
             is_git_protocol_v2: false,
@@ -151,7 +151,7 @@ pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
     codec: GitCodec,
     gitlab: Arc<U>,
     user: Option<Arc<User>>,
-    group: Option<Group>,
+    project: Option<Arc<str>>,
     // fetcher_future: Option<JoinHandle<anyhow::Result<Vec<Release>>>>,
     input_bytes: BytesMut,
     output_bytes: BytesMut,
@@ -170,10 +170,10 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             .ok_or_else(|| anyhow::anyhow!("no user set"))
     }
 
-    fn group(&self) -> anyhow::Result<&Group> {
-        self.group
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no group set"))
+    fn project(&self) -> anyhow::Result<&str> {
+        self.project
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("no project set"))
     }
 
     /// Writes a Git packet line response to the buffer, this should only
@@ -190,19 +190,19 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         );
     }
 
-    /// Fetches all the releases from the provider for the given group
+    /// Fetches all the releases from the provider for the given project
     /// and groups them by crate.
     #[instrument(skip(self), err)]
     async fn fetch_releases_by_crate(
         &self,
     ) -> anyhow::Result<IndexMap<(U::CratePath, ReleaseName), Vec<Release>>> {
         let user = self.user()?;
-        let group = self.group()?;
+        let project = self.project()?;
 
         let mut res = IndexMap::new();
 
         for (path, release) in Arc::clone(&self.gitlab)
-            .fetch_releases_for_group(group, user)
+            .fetch_releases_for_project(project, user)
             .await?
         {
             res.entry((path, Arc::clone(&release.name)))
@@ -282,18 +282,22 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // create the high-level packfile generator
         let mut packfile = GitRepository::default();
 
+        let project = self.project()?;
+
         // fetch the impersonation token for the user we'll embed
         // the `dl` string.
         let token = self.gitlab.fetch_token_for_user(self.user()?).await?;
 
         // generate the config for the user, containing the download
         // url template from gitlab and the impersonation token embedded
-        let config_json = Bytes::from_static(b"{}");
+        let config_json = Bytes::from(serde_json::to_vec(&CargoConfig {
+            dl: self.gitlab.cargo_dl_uri(project, &token)?,
+        })?);
 
         // write config.json to the root of the repo
         packfile.insert(&[], "config.json".into(), config_json)?;
 
-        // fetch the releases for every project within the given group
+        // fetch the releases for every project within the given project
         let releases_by_crate = self.fetch_releases_by_crate().await?;
 
         // a reusable buffer for writing the metadata json blobs out to
@@ -315,12 +319,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
                 // each crates file in the index is a metadata blob for
                 // each version separated by a newline
-                buffer.extend_from_slice(&serde_json::to_vec(
-                    &CargoIndexCrateMetadataWithDlOverride {
-                        meta: &meta,
-                        dl: &self.gitlab.cargo_dl_uri(crate_path, version, &token)?,
-                    },
-                )?);
+                buffer.extend_from_slice(&serde_json::to_vec(&*meta)?);
                 buffer.put_u8(b'\n');
             }
 
@@ -544,30 +543,20 @@ impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::ser
                 anyhow::bail!("not git-upload-pack");
             }
 
-            // parse the requested group from the given path (the argument
+            // parse the requested project from the given path (the argument
             // given to `git-upload-pack`)
-            if let Some(group) = args.next().filter(|v| v.as_str() != "/") {
-                let user = self.user()?;
-                let group = group.trim_start_matches('/').trim_end_matches('/');
-
-                match Arc::clone(&self.gitlab).fetch_group(group, user).await {
-                    Ok(v) => self.group = Some(v),
-                    Err(e) => {
-                        session.extended_data(channel, 1, CryptoVec::from_slice(format!(indoc::indoc! {"
-                            \r\nGitLab returned an error when attempting to query for group `{}` as `{}`:
-
-                                {}
-
-                            The group might not exist or you may not have permission to view it.\r\n
-                        "}, group, user.username, e).as_bytes()));
-                        session.close(channel);
-                    }
-                }
+            let arg = args.next();
+            if let Some(project) = arg.as_deref()
+                .filter(|v| *v != "/")
+                .map(|project| project.trim_start_matches('/').trim_end_matches('/'))
+                .filter(|project| project.contains('/'))
+            {
+                self.project = Some(Arc::from(project.to_string()));
             } else {
                 session.extended_data(channel, 1, CryptoVec::from_slice(indoc::indoc! {b"
-                    \r\nNo group was given in the path part of the SSH URI. A GitLab group should be defined in your .cargo/config.toml as follows:
+                    \r\nNo project was given in the path part of the SSH URI. A GitLab group and project should be defined in your .cargo/config.toml as follows:
                         [registries]
-                        chartered = {{ index = \"ssh://domain.to.registry.com/my-group\" }}\r\n
+                        my-project = {{ index = \"ssh://domain.to.registry.com/my-group/my-project\" }}\r\n
                 "}));
                 session.close(channel);
             }

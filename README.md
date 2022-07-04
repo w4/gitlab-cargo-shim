@@ -26,11 +26,11 @@ accordingly.
 ```toml
 # .cargo/config.toml
 [registries]
-my-gitlab-group = { index = "ssh://gitlab-cargo-shim.local/my-gitlab-group" }
+my-gitlab-project = { index = "ssh://gitlab-cargo-shim.local/my-gitlab-group/my-gitlab-project" }
 
 # Cargo.toml
 [dependencies]
-my-crate = { version = "0.1", registry = "my-gitlab-group" }
+my-crate = { version = "0.1", registry = "my-gitlab-project" }
 ```
 
 In your CI build, setup a `before_script` step to replace the connection string

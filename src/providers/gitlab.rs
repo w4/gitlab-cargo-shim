@@ -1,7 +1,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 use crate::config::GitlabConfig;
-use crate::providers::{Group, Release, User};
+use crate::providers::{Release, User};
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -112,34 +112,16 @@ impl super::UserProvider for Gitlab {
 impl super::PackageProvider for Gitlab {
     type CratePath = Arc<GitlabCratePath>;
 
-    #[instrument(skip(self), err)]
-    async fn fetch_group(&self, group: &str, do_as: &User) -> anyhow::Result<Group> {
-        let mut url = self
-            .base_url
-            .join("groups/")?
-            .join(&utf8_percent_encode(group, NON_ALPHANUMERIC).to_string())?;
-        url.query_pairs_mut()
-            .append_pair("sudo", itoa::Buffer::new().format(do_as.id));
-
-        let req = handle_error(self.client.get(url).send().await?)
-            .await?
-            .json::<GitlabGroupResponse>()
-            .await?
-            .into();
-
-        Ok(req)
-    }
-
-    #[instrument(skip(self), err)]
-    async fn fetch_releases_for_group(
+    async fn fetch_releases_for_project(
         self: Arc<Self>,
-        group: &Group,
+        project: &str,
         do_as: &User,
     ) -> anyhow::Result<Vec<(Self::CratePath, Release)>> {
         let mut next_uri = Some({
-            let mut uri = self
-                .base_url
-                .join(&format!("groups/{}/packages", group.id,))?;
+            let mut uri = self.base_url.join(&format!(
+                "projects/{}/packages",
+                urlencoding::encode(project)
+            ))?;
             {
                 let mut query = uri.query_pairs_mut();
                 query.append_pair("per_page", itoa::Buffer::new().format(100u16));
@@ -244,20 +226,12 @@ impl super::PackageProvider for Gitlab {
             .await?)
     }
 
-    fn cargo_dl_uri(
-        &self,
-        path: &Self::CratePath,
-        version: &str,
-        token: &str,
-    ) -> anyhow::Result<String> {
-        Ok(format!(
-            "{uri}projects/{project}/packages/generic/{crate_name}/{version}/{crate_name}-{version}.crate?private_token={token}",
-            uri = self.base_url,
-            project = path.project,
-            crate_name = path.package_name,
-            version = version,
-            token = token,
-        ))
+    fn cargo_dl_uri(&self, project: &str, token: &str) -> anyhow::Result<String> {
+        let uri = self
+            .base_url
+            .join("projects/")?
+            .join(&format!("{}/", urlencoding::encode(project)))?;
+        Ok(format!("{uri}packages/generic/{{crate}}/{{version}}/{{crate}}-{{version}}.crate?private_token={token}"))
     }
 }
 
@@ -278,21 +252,6 @@ async fn handle_error(resp: reqwest::Response) -> Result<reqwest::Response, anyh
 pub struct GitlabErrorResponse {
     message: Option<String>,
     error: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct GitlabGroupResponse {
-    id: u64,
-    name: String,
-}
-
-impl From<GitlabGroupResponse> for Group {
-    fn from(v: GitlabGroupResponse) -> Self {
-        Self {
-            id: v.id,
-            name: v.name,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
