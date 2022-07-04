@@ -1,5 +1,8 @@
 # socket address for the SSH server to listen on
-listen-address = "[::]:2222"
+ssh-listen-address = "[::]:2222"
+
+# socket address for the HTTP redirect server to listen on
+http-listen-address = "[::]:2280"
 
 # directory in which the generated private keys for the server
 # should be stored

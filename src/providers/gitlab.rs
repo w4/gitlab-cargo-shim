@@ -246,6 +246,7 @@ impl super::PackageProvider for Gitlab {
 
     fn cargo_dl_uri(
         &self,
+        group: &str,
         path: &Self::CratePath,
         version: &str,
         token: &str,

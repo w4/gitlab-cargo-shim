@@ -49,10 +49,8 @@ pub fn transform(
 }
 
 #[derive(Serialize, Debug)]
-pub struct CargoIndexCrateMetadataWithDlOverride<'a> {
-    #[serde(flatten)]
-    pub meta: &'a CargoIndexCrateMetadata,
-    pub dl: &'a str,
+pub struct CargoConfig {
+    pub dl: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

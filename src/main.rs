@@ -3,14 +3,16 @@
 
 pub mod config;
 pub mod git_command_handlers;
+pub mod http_server;
 pub mod metadata;
 pub mod protocol;
 pub mod providers;
 pub mod util;
 
+use crate::http_server::build_http_router;
 use crate::{
     config::Args,
-    metadata::{CargoIndexCrateMetadata, CargoIndexCrateMetadataWithDlOverride},
+    metadata::{CargoConfig, CargoIndexCrateMetadata},
     protocol::{
         codec::{Encoder, GitCodec},
         high_level::GitRepository,
@@ -98,15 +100,30 @@ async fn main() -> anyhow::Result<()> {
 
     let gitlab = Arc::new(Gitlab::new(&args.config.gitlab)?);
 
-    thrussh::server::run(
-        thrussh_config,
-        &args.config.listen_address.to_string(),
-        Server {
-            gitlab,
-            metadata_cache: MetadataCache::default(),
-        },
-    )
-    .await?;
+    let ssh_server_fut = async {
+        thrussh::server::run(
+            thrussh_config,
+            &args.config.ssh_listen_address.to_string(),
+            Server {
+                gitlab: gitlab.clone(),
+                metadata_cache: MetadataCache::default(),
+            },
+        )
+        .await
+        .map_err(|e| anyhow::Error::from(e).context("ssh server startup failure"))
+    };
+
+    let http_server_fut = async {
+        axum::Server::bind(&args.config.http_listen_address)
+            .serve(
+                build_http_router().into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .map_err(|e| anyhow::Error::from(e).context("http server startup failure"))
+    };
+
+    tokio::try_join!(ssh_server_fut, http_server_fut)?;
+
     Ok(())
 }
 
@@ -288,7 +305,9 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
         // generate the config for the user, containing the download
         // url template from gitlab and the impersonation token embedded
-        let config_json = Bytes::from_static(b"{}");
+        let config_json = Bytes::from(serde_json::to_vec(&CargoConfig {
+            dl: format!("http://127.0.0.1:2280/dl/{{crate}}/{{version}}?token={token}"),
+        })?);
 
         // write config.json to the root of the repo
         packfile.insert(&[], "config.json".into(), config_json)?;
@@ -315,12 +334,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
                 // each crates file in the index is a metadata blob for
                 // each version separated by a newline
-                buffer.extend_from_slice(&serde_json::to_vec(
-                    &CargoIndexCrateMetadataWithDlOverride {
-                        meta: &meta,
-                        dl: &self.gitlab.cargo_dl_uri(crate_path, version, &token)?,
-                    },
-                )?);
+                buffer.extend_from_slice(&serde_json::to_vec(&*meta)?);
                 buffer.put_u8(b'\n');
             }
 

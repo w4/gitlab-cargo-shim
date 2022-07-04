@@ -37,6 +37,7 @@ pub trait PackageProvider {
 
     fn cargo_dl_uri(
         &self,
+        group: &str,
         path: &Self::CratePath,
         version: &str,
         token: &str,

@@ -15,7 +15,8 @@ pub struct Args {
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    pub listen_address: SocketAddr,
+    pub ssh_listen_address: SocketAddr,
+    pub http_listen_address: SocketAddr,
     pub state_directory: PathBuf,
     pub gitlab: GitlabConfig,
 }
