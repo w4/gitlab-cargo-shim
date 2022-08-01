@@ -1722,9 +1722,9 @@ checksum = "68b90931029ab9b034b300b797048cf23723400aa757e8a2bfb9d748102f9821"
 
 [[package]]
 name = "ustr"
-version = "0.8.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbd539d8973e229b9d04f15d36e6a8f8d8f85f946b366f06bb001aaed3fa9dd9"
+checksum = "371436099f2980de56dc385b615696d3eabbdac9649a72b85f9d75f68474fa9c"
 dependencies = [
  "ahash",
  "byteorder",
