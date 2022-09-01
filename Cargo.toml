@@ -12,7 +12,7 @@ authors = [
 anyhow = "1"
 arrayvec = "0.7"
 async-trait = "0.1"
-bytes = "1.1"
+bytes = "1.2"
 cargo_metadata = "0.15"
 cargo-platform = "0.1"
 clap = { version = "3.2", features = ["derive", "cargo"] }
