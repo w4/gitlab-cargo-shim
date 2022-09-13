@@ -12,10 +12,11 @@ pub fn format_fingerprint(fingerprint: &str) -> String {
     format!("SHA256:{}", fingerprint)
 }
 
-/// Crates with a total of 1, 2 or 3 characters in the same are written out to directories named
-/// 1, 2 or 3 respectively as per the cargo spec. Anything else we'll build out a normal tree for
-/// using the first four characters of the crate name, 2 for the first directory and the other 2
-/// for the second.
+/// Crates with a total of 1, 2 characters in the same are written out to directories named
+/// 1, 2 respectively as per the cargo spec. With a total of 3 characters they're stored in a
+/// directory named 3 and then a subdirectory named after the first letter of the crate's name.
+/// Anything else we'll build out a normal tree for using the first four characters of the crate
+/// name, 2 for the first directory and the other 2 for the second.
 #[must_use]
 pub fn get_crate_folder(crate_name: &str) -> ArrayVec<&'static str, 2> {
     let mut folders = ArrayVec::new();
@@ -24,7 +25,10 @@ pub fn get_crate_folder(crate_name: &str) -> ArrayVec<&'static str, 2> {
         0 => {}
         1 => folders.push("1"),
         2 => folders.push("2"),
-        3 => folders.push("3"),
+        3 => {
+            folders.push("3");
+            folders.push(ustr(&crate_name[..1]).as_str());
+        }
         _ => {
             folders.push(ustr(&crate_name[..2]).as_str());
             folders.push(ustr(&crate_name[2..4]).as_str());
@@ -84,5 +88,30 @@ impl Deref for ArcOrCowStr {
 impl Display for ArcOrCowStr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&**self, f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crate_paths() {
+        let result = get_crate_folder("dfu");
+        let expected = ArrayVec::from(["3", "d"]);
+        assert_eq!(result, expected);
+        let result = get_crate_folder("df");
+        let mut expected = ArrayVec::new();
+        expected.push("2");
+        assert_eq!(result, expected);
+
+        let result = get_crate_folder("d");
+        let mut expected = ArrayVec::new();
+        expected.push("1");
+        assert_eq!(result, expected);
+
+        let result = get_crate_folder("longname");
+        let expected = ArrayVec::from(["lo", "ng"]);
+        assert_eq!(result, expected);
     }
 }
