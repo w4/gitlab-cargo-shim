@@ -26,19 +26,27 @@ pub fn transform(
         deps: package
             .dependencies
             .into_iter()
-            .map(|v| CargoIndexCrateMetadataDependency {
-                name: v.name,
-                req: v.req,
-                features: v.features,
-                optional: v.optional,
-                default_features: v.uses_default_features,
-                target: v.target,
-                kind: v.kind,
-                registry: Some(v.registry.map_or(
-                    Cow::Borrowed("https://github.com/rust-lang/crates.io-index.git"),
-                    Cow::Owned,
-                )),
-                package: v.rename,
+            .map(|v| {
+                let (name, package) = if let Some(rename) = v.rename {
+                    (rename, Some(v.name))
+                } else {
+                    (v.name, None)
+                };
+
+                CargoIndexCrateMetadataDependency {
+                    name,
+                    req: v.req,
+                    features: v.features,
+                    optional: v.optional,
+                    default_features: v.uses_default_features,
+                    target: v.target,
+                    kind: v.kind,
+                    registry: Some(v.registry.map_or(
+                        Cow::Borrowed("https://github.com/rust-lang/crates.io-index.git"),
+                        Cow::Owned,
+                    )),
+                    package,
+                }
             })
             .collect(),
         cksum,
