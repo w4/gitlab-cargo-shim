@@ -1,14 +1,12 @@
 use bytes::Bytes;
+use packfile::{
+    low_level::{PackFile, PackFileEntry},
+    PktLine,
+};
 use thrussh::{server::Session, ChannelId};
 use tracing::instrument;
 
-use crate::{
-    protocol::{
-        low_level::{PackFile, PackFileEntry},
-        packet_line::PktLine,
-    },
-    Handler, PackageProvider, UserProvider,
-};
+use crate::{Handler, PackageProvider, UserProvider};
 
 #[instrument(skip(handle, session, channel, metadata, packfile_entries), err)]
 pub fn handle<U: UserProvider + PackageProvider + Send + Sync + 'static>(

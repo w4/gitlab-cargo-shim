@@ -4,19 +4,12 @@
 pub mod config;
 pub mod git_command_handlers;
 pub mod metadata;
-pub mod protocol;
 pub mod providers;
 pub mod util;
 
 use crate::{
     config::Args,
     metadata::{CargoConfig, CargoIndexCrateMetadata},
-    protocol::{
-        codec::{Encoder, GitCodec},
-        high_level::GitRepository,
-        low_level::{HashOutput, PackFileEntry},
-        packet_line::PktLine,
-    },
     providers::{gitlab::Gitlab, PackageProvider, Release, ReleaseName, User, UserProvider},
     util::get_crate_folder,
 };
@@ -25,6 +18,12 @@ use bytes::{BufMut, Bytes, BytesMut};
 use clap::Parser;
 use futures::Future;
 use indexmap::IndexMap;
+use packfile::{
+    codec::{Encoder, GitCodec},
+    high_level::GitRepository,
+    low_level::{HashOutput, PackFileEntry},
+    PktLine,
+};
 use parking_lot::RwLock;
 use std::{
     borrow::Cow, collections::HashMap, fmt::Write, net::SocketAddr, net::SocketAddrV6, pin::Pin,
@@ -179,7 +178,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     /// Writes a Git packet line response to the buffer, this should only
     /// be used once the client opens a `shell_request`.
     fn write(&mut self, packet: PktLine<'_>) -> Result<(), anyhow::Error> {
-        Encoder.encode(packet, &mut self.output_bytes)
+        Ok(Encoder.encode(packet, &mut self.output_bytes)?)
     }
 
     /// Flushes the buffer out to the client
@@ -295,7 +294,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         })?);
 
         // write config.json to the root of the repo
-        packfile.insert(&[], "config.json".into(), config_json)?;
+        packfile.insert(&[], "config.json", config_json)?;
 
         // fetch the releases for every project within the given project
         let releases_by_crate = self.fetch_releases_by_crate().await?;
@@ -326,7 +325,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             // insert the crate version metadata into the packfile
             packfile.insert(
                 &get_crate_folder(crate_name),
-                Arc::clone(crate_name).into(),
+                Arc::clone(crate_name),
                 buffer.split().freeze(),
             )?;
         }

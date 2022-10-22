@@ -186,9 +186,9 @@ checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
 
 [[package]]
 name = "bytes"
-version = "1.1.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4872d67bab6358e59559027aa3b9157c53d9358c51423c17554809a8858e0f8"
+checksum = "ec8a7b6a70fde80372154c65702f00a0f56f3e1c36abbc6c440484be248856db"
 
 [[package]]
 name = "camino"
@@ -539,12 +539,12 @@ dependencies = [
  "cargo-platform",
  "cargo_metadata",
  "clap",
- "flate2",
  "futures",
  "hex",
  "indexmap",
  "indoc",
  "itoa",
+ "packfile",
  "parking_lot 0.12.1",
  "parse_link_header",
  "percent-encoding",
@@ -556,7 +556,6 @@ dependencies = [
  "shlex",
  "thrussh",
  "thrussh-keys",
- "time",
  "tokio",
  "tokio-util",
  "toml",
@@ -906,6 +905,24 @@ name = "os_str_bytes"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21326818e99cfe6ce1e524c2a805c189a99b5ae555a35d19f9a284b427d86afa"
+
+[[package]]
+name = "packfile"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3eeb3adcc3e5e1d0bf59cd1a1bc0a663497c7f89a4dc1632d8568c15da66dbef"
+dependencies = [
+ "bytes",
+ "flate2",
+ "hex",
+ "indexmap",
+ "itoa",
+ "sha1",
+ "thiserror",
+ "time",
+ "tokio-util",
+ "tracing",
+]
 
 [[package]]
 name = "parking_lot"
@@ -1499,9 +1516,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.11"
+version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72c91f41dcb2f096c05f0873d667dceec1087ce5bcf984ec8ffb19acddbb3217"
+checksum = "d634a985c4d4238ec39cacaed2e7ae552fbd3c476b552c1deac3021b7d7eaf0c"
 dependencies = [
  "libc",
  "num_threads",
@@ -1722,9 +1739,9 @@ checksum = "68b90931029ab9b034b300b797048cf23723400aa757e8a2bfb9d748102f9821"
 
 [[package]]
 name = "ustr"
-version = "0.8.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbd539d8973e229b9d04f15d36e6a8f8d8f85f946b366f06bb001aaed3fa9dd9"
+checksum = "371436099f2980de56dc385b615696d3eabbdac9649a72b85f9d75f68474fa9c"
 dependencies = [
  "ahash",
  "byteorder",
