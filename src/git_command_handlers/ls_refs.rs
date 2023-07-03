@@ -19,10 +19,10 @@ pub fn handle<U: UserProvider + PackageProvider + Send + Sync + 'static>(
     _metadata: &[Bytes],
     commit_hash: &HashOutput,
 ) -> Result<(), anyhow::Error> {
-    let commit_hash = hex::encode(&commit_hash);
+    let commit_hash = hex::encode(commit_hash);
 
     handle.write(PktLine::Data(
-        format!("{} HEAD symref-target:refs/heads/master", commit_hash).as_bytes(),
+        format!("{commit_hash} HEAD symref-target:refs/heads/master").as_bytes(),
     ))?;
     handle.write(PktLine::Flush)?;
     handle.flush(session, channel);

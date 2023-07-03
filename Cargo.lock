@@ -556,6 +556,7 @@ dependencies = [
  "shlex",
  "thrussh",
  "thrussh-keys",
+ "time",
  "tokio",
  "tokio-util",
  "toml",
@@ -1522,6 +1523,7 @@ checksum = "d634a985c4d4238ec39cacaed2e7ae552fbd3c476b552c1deac3021b7d7eaf0c"
 dependencies = [
  "libc",
  "num_threads",
+ "serde",
 ]
 
 [[package]]

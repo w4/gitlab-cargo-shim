@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow!("failed to generate server private key"))?;
         let thrussh_keys::key::KeyPair::Ed25519(key) = key;
 
-        std::fs::write(server_private_key, &key.key)?;
+        std::fs::write(server_private_key, key.key)?;
 
         thrussh_keys::key::KeyPair::Ed25519(key)
     };
@@ -350,7 +350,7 @@ type AsyncHandlerFut<T, U> =
     dyn Future<Output = Result<T, <Handler<U> as thrussh::server::Handler>::Error>> + Send;
 
 #[allow(clippy::type_complexity)]
-impl<'a, U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server::Handler
+impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server::Handler
     for Handler<U>
 {
     type Error = anyhow::Error;

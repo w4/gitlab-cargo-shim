@@ -9,7 +9,7 @@ use ustr::ustr;
 
 #[must_use]
 pub fn format_fingerprint(fingerprint: &str) -> String {
-    format!("SHA256:{}", fingerprint)
+    format!("SHA256:{fingerprint}")
 }
 
 /// Crates with a total of 1, 2 characters in the same are written out to directories named

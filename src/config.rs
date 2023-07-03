@@ -3,6 +3,7 @@
 use clap::Parser;
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{net::SocketAddr, path::PathBuf};
+use time::Duration;
 use url::Url;
 
 #[derive(Parser)]
@@ -25,6 +26,15 @@ pub struct Config {
 pub struct GitlabConfig {
     pub uri: Url,
     pub admin_token: String,
+    #[serde(default = "GitlabConfig::default_token_expiry")]
+    pub token_expiry: Duration,
+}
+
+impl GitlabConfig {
+    #[must_use]
+    const fn default_token_expiry() -> Duration {
+        Duration::days(30)
+    }
 }
 
 pub fn from_toml_path<T: DeserializeOwned>(path: &str) -> Result<T, std::io::Error> {

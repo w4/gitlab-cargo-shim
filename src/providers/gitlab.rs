@@ -8,12 +8,14 @@ use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::Arc};
+use time::{Duration, OffsetDateTime};
 use tracing::{info_span, instrument, Instrument};
 use url::Url;
 
 pub struct Gitlab {
     client: reqwest::Client,
     base_url: Url,
+    token_expiry: Duration,
 }
 
 impl Gitlab {
@@ -29,6 +31,7 @@ impl Gitlab {
                 .default_headers(headers)
                 .build()?,
             base_url: config.uri.join("api/v4/")?,
+            token_expiry: config.token_expiry,
         })
     }
 }
@@ -41,9 +44,8 @@ impl super::UserProvider for Gitlab {
         username_password: &str,
     ) -> anyhow::Result<Option<User>> {
         let mut splitter = username_password.splitn(2, ':');
-        let (username, password) = match (splitter.next(), splitter.next()) {
-            (Some(username), Some(password)) => (username, password),
-            _ => return Ok(None),
+        let (Some(username), Some(password)) = (splitter.next(), splitter.next()) else {
+            return Ok(None);
         };
 
         if username == "gitlab-ci-token" {
@@ -95,6 +97,9 @@ impl super::UserProvider for Gitlab {
                 )
                 .json(&GitlabImpersonationTokenRequest {
                     name: env!("CARGO_PKG_NAME"),
+                    expires_at: (OffsetDateTime::now_utc() + self.token_expiry)
+                        .date()
+                        .to_string(),
                     scopes: vec!["api"],
                 })
                 .send()
@@ -273,6 +278,7 @@ impl GitlabCratePath {
 #[derive(Serialize)]
 pub struct GitlabImpersonationTokenRequest {
     name: &'static str,
+    expires_at: String,
     scopes: Vec<&'static str>,
 }
 
