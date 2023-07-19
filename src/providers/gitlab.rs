@@ -5,11 +5,11 @@ use crate::providers::{Release, User};
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-use reqwest::header;
+use reqwest::{Certificate, header};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::Arc};
 use time::{Duration, OffsetDateTime};
-use tracing::{info_span, instrument, Instrument};
+use tracing::{info, info_span, instrument, Instrument};
 use url::Url;
 
 pub struct Gitlab {
@@ -26,9 +26,18 @@ impl Gitlab {
             header::HeaderValue::from_str(&config.admin_token)?,
         );
 
+        let mut client_builder = reqwest::ClientBuilder::new()
+            .default_headers(headers);
+
+        if let Some(cert_path) = &config.ssl_cert {
+            info!(cert_path,"loading gitlab certificate file");
+            let gitlab_cert_bytes = std::fs::read(&cert_path)?;
+            let gitlab_cert = Certificate::from_pem(&gitlab_cert_bytes)?;
+            client_builder = client_builder.add_root_certificate(gitlab_cert);
+        }
+
         Ok(Self {
-            client: reqwest::ClientBuilder::new()
-                .default_headers(headers)
+            client: client_builder
                 .build()?,
             base_url: config.uri.join("api/v4/")?,
             token_expiry: config.token_expiry,
@@ -58,9 +67,9 @@ impl super::UserProvider for Gitlab {
                     .send()
                     .await?,
             )
-            .await?
-            .json()
-            .await?;
+                .await?
+                .json()
+                .await?;
 
             Ok(Some(User {
                 id: res.user.id,
@@ -105,9 +114,9 @@ impl super::UserProvider for Gitlab {
                 .send()
                 .await?,
         )
-        .await?
-        .json()
-        .await?;
+            .await?
+            .json()
+            .await?;
 
         Ok(impersonation_token.token)
     }
@@ -142,7 +151,7 @@ impl super::PackageProvider for Gitlab {
         while let Some(uri) = next_uri.take() {
             let res = handle_error(self.client.get(uri).send().await?).await?;
 
-            if let Some(link_header) = res.headers().get(reqwest::header::LINK) {
+            if let Some(link_header) = res.headers().get(header::LINK) {
                 let mut link_header = parse_link_header::parse_with_rel(link_header.to_str()?)?;
 
                 if let Some(next) = link_header.remove("next") {
@@ -182,9 +191,9 @@ impl super::PackageProvider for Gitlab {
                                 .send()
                                 .await?,
                         )
-                        .await?
-                        .json()
-                        .await?;
+                            .await?
+                            .json()
+                            .await?;
 
                         let expected_file_name =
                             format!("{}-{}.crate", release.name, release.version);
@@ -205,7 +214,7 @@ impl super::PackageProvider for Gitlab {
                                 }),
                         )
                     }
-                    .instrument(info_span!("fetch_package_files")),
+                        .instrument(info_span!("fetch_package_files")),
                 ));
             }
         }

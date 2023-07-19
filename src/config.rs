@@ -28,6 +28,8 @@ pub struct GitlabConfig {
     pub admin_token: String,
     #[serde(default = "GitlabConfig::default_token_expiry")]
     pub token_expiry: Duration,
+    #[serde(default)]
+    pub ssl_cert : Option<String>
 }
 
 impl GitlabConfig {
