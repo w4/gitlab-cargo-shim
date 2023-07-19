@@ -9,7 +9,7 @@ use reqwest::{Certificate, header};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::Arc};
 use time::{Duration, OffsetDateTime};
-use tracing::{info, info_span, instrument, Instrument};
+use tracing::{info_span, instrument, Instrument};
 use url::Url;
 
 pub struct Gitlab {
@@ -30,7 +30,6 @@ impl Gitlab {
             .default_headers(headers);
 
         if let Some(cert_path) = &config.ssl_cert {
-            info!(cert_path,"loading gitlab certificate file");
             let gitlab_cert_bytes = std::fs::read(&cert_path)?;
             let gitlab_cert = Certificate::from_pem(&gitlab_cert_bytes)?;
             client_builder = client_builder.add_root_certificate(gitlab_cert);
