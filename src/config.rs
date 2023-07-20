@@ -23,8 +23,16 @@ pub struct Config {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum GitlabConfigScope {
+    Project,
+    Group,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct GitlabConfig {
     pub uri: Url,
+    #[serde(default = "GitlabConfig::default_scope")]
+    pub scope: GitlabConfigScope,
     pub admin_token: String,
     #[serde(default = "GitlabConfig::default_token_expiry")]
     pub token_expiry: Duration,
@@ -36,6 +44,11 @@ impl GitlabConfig {
     #[must_use]
     const fn default_token_expiry() -> Duration {
         Duration::days(30)
+    }
+
+    #[must_use]
+    const fn default_scope() -> GitlabConfigScope {
+        GitlabConfigScope::Project
     }
 }
 

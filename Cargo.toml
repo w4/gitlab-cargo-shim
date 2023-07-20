@@ -33,7 +33,7 @@ sha1 = "0.10"
 shlex = "1.1"
 time = { version = "0.3", features = ["serde"] }
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3"}
 thrussh = "0.33"
 thrussh-keys = "0.21"
 tokio = { version = "1.17", features = ["full"] }
@@ -43,3 +43,7 @@ url = { version = "2.2", features = ["serde"] }
 urlencoding = "2.1"
 ustr = "0.9"
 uuid = { version = "1.1", features = ["v4"] }
+
+[features]
+default=[]
+env-filter = ["tracing-subscriber/env-filter"]

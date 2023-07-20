@@ -7,6 +7,7 @@ pub mod metadata;
 pub mod providers;
 pub mod util;
 
+use crate::providers::Scope;
 use crate::{
     config::Args,
     metadata::{CargoConfig, CargoIndexCrateMetadata},
@@ -51,8 +52,10 @@ async fn main() -> anyhow::Result<()> {
     let subscriber = tracing_subscriber::fmt();
     #[cfg(debug_assertions)]
     let subscriber = subscriber.pretty();
-    subscriber.init();
+    #[cfg(feature = "env-filter")]
+    let subscriber = subscriber.with_env_filter(tracing_subscriber::EnvFilter::from_default_env());
 
+    subscriber.init();
     let args: Args = Args::parse();
 
     if !args.config.state_directory.exists() {
@@ -62,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
     let server_private_key = args.config.state_directory.join("ssh-private-key.pem");
 
     let key = if server_private_key.exists() {
+        info!(?server_private_key, "Loading server private key");
         let key_bytes = std::fs::read(&server_private_key)?;
         if key_bytes.len() != 64 {
             anyhow::bail!(
@@ -135,7 +139,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
             codec: GitCodec::default(),
             gitlab: Arc::clone(&self.gitlab),
             user: None,
-            project: None,
+            scope: None,
             input_bytes: BytesMut::new(),
             output_bytes: BytesMut::new(),
             is_git_protocol_v2: false,
@@ -146,11 +150,16 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
     }
 }
 
+pub enum RepoScope {
+    Project(Arc<str>),
+    Group(Arc<str>),
+}
+
 pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
     codec: GitCodec,
     gitlab: Arc<U>,
     user: Option<Arc<User>>,
-    project: Option<Arc<str>>,
+    scope: Option<HandlerScope>,
     // fetcher_future: Option<JoinHandle<anyhow::Result<Vec<Release>>>>,
     input_bytes: BytesMut,
     output_bytes: BytesMut,
@@ -162,6 +171,11 @@ pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
     packfile_cache: Option<Arc<(HashOutput, Vec<PackFileEntry>)>>,
 }
 
+pub enum HandlerScope {
+    Project(Arc<str>),
+    Group(Arc<str>),
+}
+
 impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     fn user(&self) -> anyhow::Result<&Arc<User>> {
         self.user
@@ -169,12 +183,13 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             .ok_or_else(|| anyhow::anyhow!("no user set"))
     }
 
-    fn project(&self) -> anyhow::Result<&str> {
-        self.project
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("no project set"))
+    fn scope(&self) -> anyhow::Result<Scope> {
+        match &self.scope {
+            Some(HandlerScope::Project(p)) => Ok(Scope::Project(p.as_ref())),
+            Some(HandlerScope::Group(g)) => Ok(Scope::Group(g.as_ref())),
+            _ => Err(anyhow::anyhow!("No Scope set")),
+        }
     }
-
     /// Writes a Git packet line response to the buffer, this should only
     /// be used once the client opens a `shell_request`.
     fn write(&mut self, packet: PktLine<'_>) -> Result<(), anyhow::Error> {
@@ -196,12 +211,13 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         &self,
     ) -> anyhow::Result<IndexMap<(U::CratePath, ReleaseName), Vec<Release>>> {
         let user = self.user()?;
-        let project = self.project()?;
+        let scope = self.scope()?;
 
         let mut res = IndexMap::new();
 
+        debug!(?scope, "Fetching releases for all crates");
         for (path, release) in Arc::clone(&self.gitlab)
-            .fetch_releases_for_project(project, user)
+            .fetch_releases_for_scope(scope, user)
             .await?
         {
             res.entry((path, Arc::clone(&release.name)))
@@ -281,7 +297,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // create the high-level packfile generator
         let mut packfile = GitRepository::default();
 
-        let project = self.project()?;
+        let scope = self.scope()?;
 
         // fetch the impersonation token for the user we'll embed
         // the `dl` string.
@@ -290,7 +306,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // generate the config for the user, containing the download
         // url template from gitlab and the impersonation token embedded
         let config_json = Bytes::from(serde_json::to_vec(&CargoConfig {
-            dl: self.gitlab.cargo_dl_uri(project, &token)?,
+            dl: self.gitlab.cargo_dl_uri(scope, &token)?,
         })?);
 
         // write config.json to the root of the repo
@@ -426,6 +442,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
                 let (commit_hash, packfile_entries) = &*self.build_packfile().await?;
 
                 while let Some(frame) = self.codec.decode(&mut self.input_bytes)? {
+                    debug!(?frame, "Received Frame");
                     // if the client flushed without giving us a command, we're expected to close
                     // the connection or else the client will just hang
                     if frame.command.is_empty() {
@@ -516,16 +533,15 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
         mut session: Session,
     ) -> Self::FutureUnit {
         let span = info_span!(parent: &self.span, "exec_request");
-
         let data = match std::str::from_utf8(data) {
             Ok(data) => data,
             Err(e) => {
-                return Box::pin(capture_errors(futures::future::err(e.into())).instrument(span))
+                return Box::pin(capture_errors(futures::future::err(e.into())).instrument(span));
             }
         };
         // parses the given args in the same fashion as a POSIX shell
         let args = shlex::split(data);
-
+        debug!(parent:&self.span,?args,"Executing command");
         Box::pin(capture_errors(async move {
             // if the client didn't send `GIT_PROTOCOL=version=2` as an environment
             // variable when connecting, we'll just close the connection
@@ -545,12 +561,21 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
             // parse the requested project from the given path (the argument
             // given to `git-upload-pack`)
             let arg = args.next();
+
+            // if the arg ends with a slash or a query string argument, it's a group
+
             if let Some(project) = arg.as_deref()
                 .filter(|v| *v != "/")
-                .map(|project| project.trim_start_matches('/').trim_end_matches('/'))
-                .filter(|project| project.contains('/'))
+                .map(|project| {
+                    project.trim_start_matches('/').trim_end_matches('/')
+                })
+                .filter(|project| {
+                    project.contains('/')
+                })
             {
-                self.project = Some(Arc::from(project.to_string()));
+                self.scope = project.split_once("?scope=group")
+                    .map(|(group, _)| HandlerScope::Group(Arc::from(group.trim_end_matches('/').to_string())))
+                    .or_else(|| Some(HandlerScope::Project(Arc::from(project.to_string()))));
             } else {
                 session.extended_data(channel, 1, CryptoVec::from_slice(indoc::indoc! {b"
                     \r\nNo project was given in the path part of the SSH URI. A GitLab group and project should be defined in your .cargo/config.toml as follows:

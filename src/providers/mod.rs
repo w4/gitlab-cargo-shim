@@ -21,11 +21,13 @@ pub trait PackageProvider {
     /// figure out the path of a package.
     type CratePath: std::fmt::Debug + Send + std::hash::Hash + Clone + Eq + PartialEq + Send + Sync;
 
-    async fn fetch_releases_for_project(
+    async fn fetch_releases_for_scope<'a>(
         self: Arc<Self>,
-        project: &str,
+        scope: Scope<'a>,
         do_as: &User,
-    ) -> anyhow::Result<Vec<(Self::CratePath, Release)>>;
+    ) -> anyhow::Result<Vec<(Self::CratePath, Release)>>
+    where
+        Scope<'a>: 'async_trait;
 
     async fn fetch_metadata_for_release(
         &self,
@@ -33,7 +35,7 @@ pub trait PackageProvider {
         version: &str,
     ) -> anyhow::Result<cargo_metadata::Metadata>;
 
-    fn cargo_dl_uri(&self, project: &str, token: &str) -> anyhow::Result<String>;
+    fn cargo_dl_uri(&self, scope: Scope, token: &str) -> anyhow::Result<String>;
 }
 
 #[derive(Debug, Clone)]
@@ -49,4 +51,10 @@ pub struct Release {
     pub name: ReleaseName,
     pub version: String,
     pub checksum: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Scope<'a> {
+    Project(&'a str),
+    Group(&'a str),
 }

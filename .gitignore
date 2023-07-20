@@ -1,3 +1,5 @@
 /target
 /.idea
 config-private.toml
+cert-private.pem
+/keys/*.pem
