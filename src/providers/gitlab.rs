@@ -31,7 +31,7 @@ impl Gitlab {
 
         let ssl_cert = match &config.ssl_cert {
             Some(cert_path) => {
-                let gitlab_cert_bytes = std::fs::read(&cert_path)?;
+                let gitlab_cert_bytes = std::fs::read(cert_path)?;
                 let gitlab_cert = Certificate::from_pem(&gitlab_cert_bytes)?;
                 client_builder = client_builder.add_root_certificate(gitlab_cert.clone());
                 Some(gitlab_cert)
@@ -65,7 +65,7 @@ impl super::UserProvider for Gitlab {
             // want to use our admin token for this request but still want to use any ssl cert provided.
             let mut client_builder = reqwest::Client::builder();
             if let Some(cert) = &self.ssl_cert {
-                client_builder = client_builder.add_root_certificate(cert.clone())
+                client_builder = client_builder.add_root_certificate(cert.clone());
             }
             let client = client_builder.build();
             let res: GitlabJobResponse = handle_error(
