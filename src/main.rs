@@ -36,7 +36,7 @@ use thrussh::{
 };
 use thrussh_keys::key::PublicKey;
 use tokio_util::{codec::Decoder, codec::Encoder as CodecEncoder};
-use tracing::{debug, error, info, info_span, instrument, Instrument, Span};
+use tracing::{debug, error, info, info_span, instrument, Instrument, Span, trace};
 use uuid::Uuid;
 
 const AGENT: &str = concat!(
@@ -309,6 +309,8 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             dl: self.gitlab.cargo_dl_uri(scope, &token)?,
         })?);
 
+        debug!(?config_json,"packfile: config.json");
+
         // write config.json to the root of the repo
         packfile.insert(&[], "config.json", config_json)?;
 
@@ -331,6 +333,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
                 let meta = self
                     .fetch_metadata(crate_path, checksum, crate_name, version)
                     .await?;
+                trace!(?meta,"Retrieved metadata for {crate_name},{version}");
 
                 // each crates file in the index is a metadata blob for
                 // each version separated by a newline

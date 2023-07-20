@@ -75,9 +75,9 @@ impl super::UserProvider for Gitlab {
                     .send()
                     .await?,
             )
-            .await?
-            .json()
-            .await?;
+                .await?
+                .json()
+                .await?;
 
             Ok(Some(User {
                 id: res.user.id,
@@ -122,9 +122,9 @@ impl super::UserProvider for Gitlab {
                 .send()
                 .await?,
         )
-        .await?
-        .json()
-        .await?;
+            .await?
+            .json()
+            .await?;
 
         Ok(impersonation_token.token)
     }
@@ -155,8 +155,8 @@ impl super::PackageProvider for Gitlab {
         scope: Scope<'a>,
         do_as: &User,
     ) -> anyhow::Result<Vec<(Self::CratePath, Release)>>
-    where
-        Scope<'a>: 'async_trait,
+        where
+            Scope<'a>: 'async_trait,
     {
         let mut next_uri = Some({
             let mut uri = self.releases_uri(scope)?;
@@ -214,9 +214,9 @@ impl super::PackageProvider for Gitlab {
                                 .send()
                                 .await?,
                         )
-                        .await?
-                        .json()
-                        .await?;
+                            .await?
+                            .json()
+                            .await?;
 
                         let expected_file_name =
                             format!("{}-{}.crate", release.name, release.version);
@@ -237,7 +237,7 @@ impl super::PackageProvider for Gitlab {
                                 }),
                         )
                     }
-                    .instrument(info_span!("fetch_package_files")),
+                        .instrument(info_span!("fetch_package_files")),
                 ));
             }
         }
@@ -268,8 +268,16 @@ impl super::PackageProvider for Gitlab {
             Scope::Project(project) => self
                 .base_url
                 .join("projects/")?
-                .join(&format!("{}/", urlencoding::encode(project)))?,
-            Scope::Group(_) => self.base_url.join("projects/{crate}/")?,
+                .join(&format!("{}/", urlencoding::encode(project)))?
+                .to_string()
+            ,
+            Scope::Group(group) => self
+                .base_url
+                .join("projects/")?
+                .join(&urlencoding::encode(&format!("{group}/")))?
+                .to_string()
+                + "{crate}/"
+            ,
         };
         Ok(format!("{uri}packages/generic/{{crate}}/{{version}}/{{crate}}-{{version}}.crate?private_token={token}"))
     }
