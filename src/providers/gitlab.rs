@@ -5,7 +5,7 @@ use crate::providers::{Release, User};
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-use reqwest::header;
+use reqwest::{header, Certificate};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::Arc};
 use time::{Duration, OffsetDateTime};
@@ -16,6 +16,7 @@ pub struct Gitlab {
     client: reqwest::Client,
     base_url: Url,
     token_expiry: Duration,
+    ssl_cert: Option<Certificate>,
 }
 
 impl Gitlab {
@@ -26,12 +27,23 @@ impl Gitlab {
             header::HeaderValue::from_str(&config.admin_token)?,
         );
 
+        let mut client_builder = reqwest::ClientBuilder::new().default_headers(headers);
+
+        let ssl_cert = match &config.ssl_cert {
+            Some(cert_path) => {
+                let gitlab_cert_bytes = std::fs::read(cert_path)?;
+                let gitlab_cert = Certificate::from_pem(&gitlab_cert_bytes)?;
+                client_builder = client_builder.add_root_certificate(gitlab_cert.clone());
+                Some(gitlab_cert)
+            }
+            _ => None,
+        };
+
         Ok(Self {
-            client: reqwest::ClientBuilder::new()
-                .default_headers(headers)
-                .build()?,
+            client: client_builder.build()?,
             base_url: config.uri.join("api/v4/")?,
             token_expiry: config.token_expiry,
+            ssl_cert,
         })
     }
 }
@@ -49,10 +61,15 @@ impl super::UserProvider for Gitlab {
         };
 
         if username == "gitlab-ci-token" {
+            // we're purposely not using `self.client` here as we don't
+            // want to use our admin token for this request but still want to use any ssl cert provided.
+            let mut client_builder = reqwest::Client::builder();
+            if let Some(cert) = &self.ssl_cert {
+                client_builder = client_builder.add_root_certificate(cert.clone());
+            }
+            let client = client_builder.build();
             let res: GitlabJobResponse = handle_error(
-                // we're purposely not using `self.client` here as we don't
-                // want to use our admin token for this request
-                reqwest::Client::new()
+                client?
                     .get(self.base_url.join("job/")?)
                     .header("JOB-TOKEN", password)
                     .send()
@@ -142,7 +159,7 @@ impl super::PackageProvider for Gitlab {
         while let Some(uri) = next_uri.take() {
             let res = handle_error(self.client.get(uri).send().await?).await?;
 
-            if let Some(link_header) = res.headers().get(reqwest::header::LINK) {
+            if let Some(link_header) = res.headers().get(header::LINK) {
                 let mut link_header = parse_link_header::parse_with_rel(link_header.to_str()?)?;
 
                 if let Some(next) = link_header.remove("next") {
