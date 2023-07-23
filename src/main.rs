@@ -36,7 +36,7 @@ use thrussh::{
 };
 use thrussh_keys::key::PublicKey;
 use tokio_util::{codec::Decoder, codec::Encoder as CodecEncoder};
-use tracing::{debug, error, info, info_span, instrument, Instrument, Span, trace};
+use tracing::{debug, error, info, info_span, instrument, Instrument, Span};
 use uuid::Uuid;
 
 const AGENT: &str = concat!(
@@ -333,7 +333,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
                 let meta = self
                     .fetch_metadata(crate_path, checksum, crate_name, version)
                     .await?;
-                trace!(?meta,"Retrieved metadata for {crate_name},{version}");
+                debug!(?meta,"Retrieved metadata for {crate_name},{version}");
 
                 // each crates file in the index is a metadata blob for
                 // each version separated by a newline
@@ -544,7 +544,6 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
         };
         // parses the given args in the same fashion as a POSIX shell
         let args = shlex::split(data);
-        debug!(parent:&self.span,?args,"Executing command");
         Box::pin(capture_errors(async move {
             // if the client didn't send `GIT_PROTOCOL=version=2` as an environment
             // variable when connecting, we'll just close the connection

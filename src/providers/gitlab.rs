@@ -75,9 +75,9 @@ impl super::UserProvider for Gitlab {
                     .send()
                     .await?,
             )
-                .await?
-                .json()
-                .await?;
+            .await?
+            .json()
+            .await?;
 
             Ok(Some(User {
                 id: res.user.id,
@@ -122,9 +122,9 @@ impl super::UserProvider for Gitlab {
                 .send()
                 .await?,
         )
-            .await?
-            .json()
-            .await?;
+        .await?
+        .json()
+        .await?;
 
         Ok(impersonation_token.token)
     }
