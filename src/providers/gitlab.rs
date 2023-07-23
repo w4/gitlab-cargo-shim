@@ -1,7 +1,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 use crate::config::GitlabConfig;
-use crate::providers::{Release, User};
+use crate::providers::{Release, Scope, User};
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -9,7 +9,7 @@ use reqwest::{header, Certificate};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::Arc};
 use time::{Duration, OffsetDateTime};
-use tracing::{info_span, instrument, Instrument};
+use tracing::{debug, info_span, instrument, Instrument};
 use url::Url;
 
 pub struct Gitlab {
@@ -130,27 +130,42 @@ impl super::UserProvider for Gitlab {
     }
 }
 
+impl Gitlab {
+    fn releases_uri(&self, scope: Scope) -> anyhow::Result<Url> {
+        let uri = match scope {
+            Scope::Project(project) => self.base_url.join(&format!(
+                "projects/{}/packages?package_type=generic",
+                urlencoding::encode(project)
+            ))?,
+            Scope::Group(group) => self.base_url.join(&format!(
+                "groups/{}/packages?package_type=generic",
+                urlencoding::encode(group)
+            ))?,
+        };
+        Ok(uri)
+    }
+}
+
 #[async_trait]
 impl super::PackageProvider for Gitlab {
     type CratePath = Arc<GitlabCratePath>;
 
-    async fn fetch_releases_for_project(
+    async fn fetch_releases_for_scope<'a>(
         self: Arc<Self>,
-        project: &str,
+        scope: Scope<'a>,
         do_as: &User,
-    ) -> anyhow::Result<Vec<(Self::CratePath, Release)>> {
+    ) -> anyhow::Result<Vec<(Self::CratePath, Release)>>
+        where
+            Scope<'a>: 'async_trait,
+    {
         let mut next_uri = Some({
-            let mut uri = self.base_url.join(&format!(
-                "projects/{}/packages",
-                urlencoding::encode(project)
-            ))?;
-            {
-                let mut query = uri.query_pairs_mut();
-                query.append_pair("per_page", itoa::Buffer::new().format(100u16));
-                query.append_pair("pagination", "keyset");
-                query.append_pair("sort", "asc");
-                query.append_pair("sudo", itoa::Buffer::new().format(do_as.id));
-            }
+            let mut uri = self.releases_uri(scope)?;
+            uri.query_pairs_mut()
+                .append_pair("per_page", itoa::Buffer::new().format(100u16))
+                .append_pair("pagination", "keyset")
+                .append_pair("sort", "asc")
+                .append_pair("sudo", itoa::Buffer::new().format(do_as.id))
+                .finish();
             uri
         });
 
@@ -199,9 +214,9 @@ impl super::PackageProvider for Gitlab {
                                 .send()
                                 .await?,
                         )
-                        .await?
-                        .json()
-                        .await?;
+                            .await?
+                            .json()
+                            .await?;
 
                         let expected_file_name =
                             format!("{}-{}.crate", release.name, release.version);
@@ -222,7 +237,7 @@ impl super::PackageProvider for Gitlab {
                                 }),
                         )
                     }
-                    .instrument(info_span!("fetch_package_files")),
+                        .instrument(info_span!("fetch_package_files")),
                 ));
             }
         }
@@ -241,18 +256,29 @@ impl super::PackageProvider for Gitlab {
         version: &str,
     ) -> anyhow::Result<cargo_metadata::Metadata> {
         let uri = self.base_url.join(&path.metadata_uri(version))?;
-
+        debug!(%uri,"Fetching metadata");
         Ok(handle_error(self.client.get(uri).send().await?)
             .await?
             .json()
             .await?)
     }
 
-    fn cargo_dl_uri(&self, project: &str, token: &str) -> anyhow::Result<String> {
-        let uri = self
-            .base_url
-            .join("projects/")?
-            .join(&format!("{}/", urlencoding::encode(project)))?;
+    fn cargo_dl_uri(&self, scope: Scope, token: &str) -> anyhow::Result<String> {
+        let uri = match scope {
+            Scope::Project(project) => self
+                .base_url
+                .join("projects/")?
+                .join(&format!("{}/", urlencoding::encode(project)))?
+                .to_string()
+            ,
+            Scope::Group(group) => self
+                .base_url
+                .join("projects/")?
+                .join(&urlencoding::encode(&format!("{group}/")))?
+                .to_string()
+                + "{crate}/"
+            ,
+        };
         Ok(format!("{uri}packages/generic/{{crate}}/{{version}}/{{crate}}-{{version}}.crate?private_token={token}"))
     }
 }

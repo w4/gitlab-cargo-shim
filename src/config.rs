@@ -25,6 +25,7 @@ pub struct Config {
 #[serde(rename_all = "kebab-case")]
 pub struct GitlabConfig {
     pub uri: Url,
+
     pub admin_token: String,
     #[serde(default = "GitlabConfig::default_token_expiry")]
     pub token_expiry: Duration,
