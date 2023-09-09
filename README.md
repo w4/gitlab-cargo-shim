@@ -34,13 +34,13 @@ To release your package from CI, add a new pipeline step:
 
 ```yaml
 release-crate:
-  image: rust:1.62
+  image: rust:latest
   stage: deploy
   only: # release when a tag is pushed
     - tags
   before_script:
     - cargo install cargo-get
-    - export CRATE_NAME=$(cargo get --name) CRATE_VERSION=$(cargo get version)
+    - export CRATE_NAME=$(cargo-get package.name) CRATE_VERSION=$(cargo-get package.version)
     - export CRATE_FILE=${CRATE_NAME}-${CRATE_VERSION}.crate
   script:
     - cargo package
