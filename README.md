@@ -6,9 +6,9 @@ Say goodbye to your Git dependencies, `gitlab-cargo-shim` is a stateless SSH ser
 
 Access controls work like they do in GitLab, builds are scoped to users - if they don't have permission to the dependency they can't build it, it's that simple.
 
-Users are identified by their SSH keys from GitLab when connecting to the server and an [impersonation token][imp-token] will be generated for that run in order to pull available versions. Builds will insert their token as a username to the SSH server and the shim will use that to call the GitLab API.
+Users are either identified by their SSH keys from GitLab when connecting to the server or by an Gitlab personal-token. If no token is given, an [impersonation token][imp-token] will be generated for that run in order to pull available versions. Doing so requires ad admin personal token.
 
-To publish run `cargo package` and push the resulting `.crate` file to the GitLab package repository with a semver-compatible version string, to consume the package configure your `.cargo/config.toml` and `Cargo.toml` accordingly.
+To publish run `cargo package` and push the resulting `.crate` file to the GitLab package repository with a semver-compatible version string, to consume the package configure your `.cargo/config.toml`, `Cargo.toml` and, optionally, `.ssh/config` accordingly.
 
 At time of writing, `libssh2`, which `cargo` implicitly uses for communicating with the registry by SSH, is incompatible with rust's `thrussh`, due to non-overlapping ciphers. Hence, activating `net.git-fetch-with-cli` is necessary.
 
@@ -22,7 +22,8 @@ git-fetch-with-cli = true
 # Cargo.toml
 [dependencies]
 my-crate = { version = "0.1", registry = "my-gitlab-project" }
-
+```
+```ssh-config
 # .ssh/config (only if authentication by personal token is requires)
 Host gitlab-cargo-shim.local
     User personal-token:<your-personal-token>
