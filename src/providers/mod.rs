@@ -31,6 +31,7 @@ pub trait PackageProvider {
         &self,
         path: &Self::CratePath,
         version: &str,
+        do_as: &User,
     ) -> anyhow::Result<cargo_metadata::Metadata>;
 
     fn cargo_dl_uri(&self, project: &str, token: &str) -> anyhow::Result<String>;

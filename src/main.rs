@@ -241,7 +241,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
         // fetch metadata from the provider
         let metadata = Arc::clone(&self.gitlab)
-            .fetch_metadata_for_release(path, crate_version)
+            .fetch_metadata_for_release(path, crate_version, self.user()?)
             .await?;
 
         // transform the `cargo metadata` output to the cargo index

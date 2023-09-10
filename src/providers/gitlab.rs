@@ -178,15 +178,23 @@ impl super::PackageProvider for Gitlab {
                 query.append_pair("per_page", itoa::Buffer::new().format(100u16));
                 query.append_pair("pagination", "keyset");
                 query.append_pair("sort", "asc");
-                query.append_pair("sudo", itoa::Buffer::new().format(do_as.id));
+                if do_as.token.is_none() {
+                    query.append_pair("sudo", itoa::Buffer::new().format(do_as.id));
+                }
             }
             uri
         });
 
         let futures = FuturesUnordered::new();
 
+        let client = match &do_as.token {
+            None => self.client.clone(),
+            Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?
+        };
+        let client = Arc::new(client);
+
         while let Some(uri) = next_uri.take() {
-            let res = handle_error(self.client.get(uri).send().await?).await?;
+            let res = handle_error(client.get(uri).send().await?).await?;
 
             if let Some(link_header) = res.headers().get(header::LINK) {
                 let mut link_header = parse_link_header::parse_with_rel(link_header.to_str()?)?;
@@ -200,6 +208,7 @@ impl super::PackageProvider for Gitlab {
 
             for release in res {
                 let this = Arc::clone(&self);
+                let client = Arc::clone(&client);
 
                 futures.push(tokio::spawn(
                     async move {
@@ -218,7 +227,7 @@ impl super::PackageProvider for Gitlab {
                         });
 
                         let package_files: Vec<GitlabPackageFilesResponse> = handle_error(
-                            this.client
+                            client
                                 .get(format!(
                                     "{}/projects/{}/packages/{}/package_files",
                                     this.base_url,
@@ -268,10 +277,15 @@ impl super::PackageProvider for Gitlab {
         &self,
         path: &Self::CratePath,
         version: &str,
+        do_as: &User,
     ) -> anyhow::Result<cargo_metadata::Metadata> {
         let uri = self.base_url.join(&path.metadata_uri(version))?;
+        let client = match &do_as.token {
+            None => self.client.clone(),
+            Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?
+        };
 
-        Ok(handle_error(self.client.get(uri).send().await?)
+        Ok(handle_error(client.get(uri).send().await?)
             .await?
             .json()
             .await?)
