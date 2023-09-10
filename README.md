@@ -10,10 +10,14 @@ Users are identified by their SSH keys from GitLab when connecting to the server
 
 To publish run `cargo package` and push the resulting `.crate` file to the GitLab package repository with a semver-compatible version string, to consume the package configure your `.cargo/config.toml` and `Cargo.toml` accordingly.
 
+At time of writing, `libssh2`, which `cargo` implicitly uses for communicating with the registry by SSH, is incompatible with rust's `thrussh`, due to non-overlapping ciphers. Hence, activating `net.git-fetch-with-cli` is necessary.
+
 ```toml
 # .cargo/config.toml
 [registries]
-my-gitlab-project = { index = "ssh://gitlab-cargo-shim.local/my-gitlab-group/my-gitlab-project" }
+my-gitlab-project = { index = "ssh://gitlab-cargo-shim.local/my-gitlab-group/my-gitlab-project/" }
+[net]
+git-fetch-with-cli = true
 
 # Cargo.toml
 [dependencies]
