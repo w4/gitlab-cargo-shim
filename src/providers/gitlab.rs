@@ -92,6 +92,7 @@ impl super::UserProvider for Gitlab {
                 Ok(Some(User {
                         id: res.user.id,
                         username: res.user.username,
+                        ..Default::default()
                 }))
             } else {
                 let res: GitlabUserResponse = handle_error(
@@ -107,6 +108,7 @@ impl super::UserProvider for Gitlab {
                 Ok(Some(User {
                         id: res.id,
                         username: res.username,
+                        token: Some(password.to_string()),
                 }))
             }
         } else {
@@ -127,6 +129,7 @@ impl super::UserProvider for Gitlab {
         Ok(res.user.map(|u| User {
             id: u.id,
             username: u.username,
+            ..Default::default()
         }))
     }
 

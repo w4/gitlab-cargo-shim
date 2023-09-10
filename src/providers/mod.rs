@@ -36,10 +36,11 @@ pub trait PackageProvider {
     fn cargo_dl_uri(&self, project: &str, token: &str) -> anyhow::Result<String>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct User {
     pub id: u64,
     pub username: String,
+    pub token: Option<String>,
 }
 
 pub type ReleaseName = Arc<str>;
