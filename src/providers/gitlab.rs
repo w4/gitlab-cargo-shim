@@ -204,7 +204,11 @@ impl super::PackageProvider for Gitlab {
                 }
             }
 
-            let res: Vec<GitlabPackageResponse> = res.json().await?;
+            let res: Vec<GitlabPackageResponse> = res.json::<Vec<GitlabPackageResponse>>()
+                                                     .await?
+                                                     .into_iter()
+                                                     .filter(|release| release.package_type == "generic")
+                                                     .collect();
 
             for release in res {
                 let this = Arc::clone(&self);
@@ -358,6 +362,7 @@ pub struct GitlabPackageResponse {
     pub id: u64,
     pub name: String,
     pub version: String,
+    pub package_type: String,
     #[serde(rename = "_links")]
     pub links: GitlabPackageLinksResponse,
 }
