@@ -285,7 +285,10 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
         // fetch the impersonation token for the user we'll embed
         // the `dl` string.
-        let token = self.gitlab.fetch_token_for_user(self.user()?).await?;
+        let token = match &self.user()?.token {
+            None => self.gitlab.fetch_token_for_user(self.user()?).await?,
+            Some(token) => token.clone(),
+        };
 
         // generate the config for the user, containing the download
         // url template from gitlab and the impersonation token embedded
