@@ -11,6 +11,7 @@ use std::{borrow::Cow, sync::Arc};
 use time::{Duration, OffsetDateTime};
 use tracing::{info_span, instrument, Instrument};
 use url::Url;
+use std::str::FromStr;
 
 pub struct Gitlab {
     client: reqwest::Client,
@@ -46,6 +47,19 @@ impl Gitlab {
             ssl_cert,
         })
     }
+
+    pub fn build_client_with_token(&self, token_field: &str, token: &str) -> anyhow::Result<reqwest::Client> {
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_str(token_field)?,
+            header::HeaderValue::from_str(token)?,
+        );
+        let mut client_builder = reqwest::ClientBuilder::new().default_headers(headers);
+        if let Some(cert) = &self.ssl_cert {
+            client_builder = client_builder.add_root_certificate(cert.clone());
+        }
+        Ok(client_builder.build()?)
+    }
 }
 
 #[async_trait]
@@ -63,11 +77,7 @@ impl super::UserProvider for Gitlab {
         if username == "gitlab-ci-token" {
             // we're purposely not using `self.client` here as we don't
             // want to use our admin token for this request but still want to use any ssl cert provided.
-            let mut client_builder = reqwest::Client::builder();
-            if let Some(cert) = &self.ssl_cert {
-                client_builder = client_builder.add_root_certificate(cert.clone());
-            }
-            let client = client_builder.build();
+            let client = self.build_client_with_token("JOB-TOKEN", password);
             let res: GitlabJobResponse = handle_error(
                 client?
                     .get(self.base_url.join("job/")?)
