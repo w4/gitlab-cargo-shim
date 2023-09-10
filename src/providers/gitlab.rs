@@ -74,25 +74,41 @@ impl super::UserProvider for Gitlab {
             return Ok(None);
         };
 
-        if username == "gitlab-ci-token" {
+        if username == "gitlab-ci-token" || username == "personal-token" {
             // we're purposely not using `self.client` here as we don't
             // want to use our admin token for this request but still want to use any ssl cert provided.
-            let client = self.build_client_with_token("JOB-TOKEN", password);
-            let res: GitlabJobResponse = handle_error(
-                client?
-                    .get(self.base_url.join("job/")?)
-                    .header("JOB-TOKEN", password)
-                    .send()
-                    .await?,
-            )
-            .await?
-            .json()
-            .await?;
+            let client = self.build_client_with_token(if username == "gitlab-ci-token" { "JOB-TOKEN" } else { "PRIVATE-TOKEN" }, password);
+            if username == "gitlab-ci-token" {
+                let res: GitlabJobResponse = handle_error(
+                    client?
+                        .get(self.base_url.join("job/")?)
+                        .send()
+                        .await?,
+                )
+                .await?
+                .json()
+                .await?;
 
-            Ok(Some(User {
-                id: res.user.id,
-                username: res.user.username,
-            }))
+                Ok(Some(User {
+                        id: res.user.id,
+                        username: res.user.username,
+                }))
+            } else {
+                let res: GitlabUserResponse = handle_error(
+                    client?
+                        .get(self.base_url.join("user/")?)
+                        .send()
+                        .await?,
+                )
+                .await?
+                .json()
+                .await?;
+
+                Ok(Some(User {
+                        id: res.id,
+                        username: res.username,
+                }))
+            }
         } else {
             Ok(None)
         }
