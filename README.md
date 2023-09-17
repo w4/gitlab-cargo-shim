@@ -22,6 +22,10 @@ git-fetch-with-cli = true
 # Cargo.toml
 [dependencies]
 my-crate = { version = "0.1", registry = "my-gitlab-project" }
+
+# .ssh/config (only if authentication by personal token is requires)
+Host gitlab-cargo-shim.local
+    User personal-token:<your-personal-token>
 ```
 
 In your CI build, setup a `before_script` step to replace the connection string with one containing the CI token:
