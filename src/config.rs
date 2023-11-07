@@ -2,18 +2,18 @@
 
 use clap::Parser;
 use serde::{de::DeserializeOwned, Deserialize};
-use std::{net::SocketAddr, path::PathBuf};
+use std::{io, net::SocketAddr, path::PathBuf, str::FromStr};
 use time::Duration;
 use url::Url;
 
 #[derive(Parser)]
 #[clap(version = clap::crate_version!(), author = clap::crate_authors!())]
 pub struct Args {
-    #[clap(short, long, parse(try_from_str = from_toml_path))]
+    #[clap(short, long)]
     pub config: Config,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub listen_address: SocketAddr,
@@ -21,7 +21,15 @@ pub struct Config {
     pub gitlab: GitlabConfig,
 }
 
-#[derive(Deserialize)]
+impl FromStr for Config {
+    type Err = io::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        from_toml_path(s)
+    }
+}
+
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct GitlabConfig {
     pub uri: Url,

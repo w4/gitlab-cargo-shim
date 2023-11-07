@@ -26,15 +26,20 @@ use packfile::{
 };
 use parking_lot::RwLock;
 use std::{
-    borrow::Cow, collections::HashMap, fmt::Write, net::SocketAddr, net::SocketAddrV6, pin::Pin,
-    str::FromStr, sync::Arc,
+    borrow::Cow,
+    collections::HashMap,
+    fmt::Write,
+    net::{SocketAddr, SocketAddrV6},
+    pin::Pin,
+    str::FromStr,
+    sync::Arc,
 };
 use thrussh::{
     server::{Auth, Session},
     ChannelId, CryptoVec,
 };
 use thrussh_keys::key::PublicKey;
-use tokio_util::{codec::Decoder, codec::Encoder as CodecEncoder};
+use tokio_util::codec::{Decoder, Encoder as CodecEncoder};
 use tracing::{debug, error, info, info_span, instrument, Instrument, Span};
 use uuid::Uuid;
 
@@ -192,6 +197,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     /// Fetches all the releases from the provider for the given project
     /// and groups them by crate.
     #[instrument(skip(self), err)]
+    #[allow(clippy::type_complexity)]
     async fn fetch_releases_by_crate(
         &self,
     ) -> anyhow::Result<IndexMap<(U::CratePath, ReleaseName), Vec<Release>>> {
