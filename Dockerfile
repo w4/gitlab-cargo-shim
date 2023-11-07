@@ -1,6 +1,6 @@
 FROM rust:1-slim-bookworm AS builder
 
-RUN apt update && apt install -y make pkg-config libsodium-dev
+RUN apt update && apt install -y make
 
 COPY . /sources
 WORKDIR /sources
