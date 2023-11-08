@@ -6,8 +6,6 @@ authors = [
     "Jordan Doyle <jordan@doyl.ee>"
 ]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 anyhow = "1"
 arrayvec = "0.7"
@@ -15,11 +13,11 @@ async-trait = "0.1"
 bytes = "1.1"
 cargo_metadata = "0.15"
 cargo-platform = "0.1"
-clap = { version = "3.2", features = ["derive", "cargo"] }
+clap = { version = "4", features = ["derive", "cargo", "wrap_help"] }
 futures = "0.3"
 hex = "0.4"
 itoa = "1.0"
-indexmap = "1.9"
+indexmap = "2"
 indoc = "1.0"
 packfile = "0.1"
 parse_link_header = "0.3"
@@ -29,17 +27,17 @@ reqwest = { version = "0.11", default-features = false, features = ["json", "rus
 semver = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
-sha1 = "0.10"
 shlex = "1.1"
 time = { version = "0.3", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
-thrussh = "0.33"
-thrussh-keys = "0.21"
+thrussh = "0.34"
+thrussh-keys = "0.22"
+thrussh-libsodium = "=0.2.1" # 0.2.2 causes dynamic linking by enabling use-pkg-config
 tokio = { version = "1.17", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 toml = "0.5"
 url = { version = "2.2", features = ["serde"] }
 urlencoding = "2.1"
-ustr = "0.9"
+ustr = "0.10"
 uuid = { version = "1.1", features = ["v4"] }
