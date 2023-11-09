@@ -33,7 +33,8 @@ impl FromStr for Config {
 #[serde(rename_all = "kebab-case")]
 pub struct GitlabConfig {
     pub uri: Url,
-    pub admin_token: String,
+    /// If absent personal access tokens must be provided.
+    pub admin_token: Option<String>,
     #[serde(default = "GitlabConfig::default_token_expiry")]
     pub token_expiry: Duration,
     #[serde(default)]
