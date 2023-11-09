@@ -11,6 +11,7 @@ use std::{borrow::Cow, sync::Arc};
 use time::{Duration, OffsetDateTime};
 use tracing::{info_span, instrument, Instrument};
 use url::Url;
+use std::str::FromStr;
 
 pub struct Gitlab {
     client: reqwest::Client,
@@ -46,6 +47,19 @@ impl Gitlab {
             ssl_cert,
         })
     }
+
+    pub fn build_client_with_token(&self, token_field: &str, token: &str) -> anyhow::Result<reqwest::Client> {
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_str(token_field)?,
+            header::HeaderValue::from_str(token)?,
+        );
+        let mut client_builder = reqwest::ClientBuilder::new().default_headers(headers);
+        if let Some(cert) = &self.ssl_cert {
+            client_builder = client_builder.add_root_certificate(cert.clone());
+        }
+        Ok(client_builder.build()?)
+    }
 }
 
 #[async_trait]
@@ -60,29 +74,43 @@ impl super::UserProvider for Gitlab {
             return Ok(None);
         };
 
-        if username == "gitlab-ci-token" {
+        if username == "gitlab-ci-token" || username == "personal-token" {
             // we're purposely not using `self.client` here as we don't
             // want to use our admin token for this request but still want to use any ssl cert provided.
-            let mut client_builder = reqwest::Client::builder();
-            if let Some(cert) = &self.ssl_cert {
-                client_builder = client_builder.add_root_certificate(cert.clone());
-            }
-            let client = client_builder.build();
-            let res: GitlabJobResponse = handle_error(
-                client?
-                    .get(self.base_url.join("job/")?)
-                    .header("JOB-TOKEN", password)
-                    .send()
-                    .await?,
-            )
-            .await?
-            .json()
-            .await?;
+            let client = self.build_client_with_token(if username == "gitlab-ci-token" { "JOB-TOKEN" } else { "PRIVATE-TOKEN" }, password);
+            if username == "gitlab-ci-token" {
+                let res: GitlabJobResponse = handle_error(
+                    client?
+                        .get(self.base_url.join("job/")?)
+                        .send()
+                        .await?,
+                )
+                .await?
+                .json()
+                .await?;
 
-            Ok(Some(User {
-                id: res.user.id,
-                username: res.user.username,
-            }))
+                Ok(Some(User {
+                        id: res.user.id,
+                        username: res.user.username,
+                        ..Default::default()
+                }))
+            } else {
+                let res: GitlabUserResponse = handle_error(
+                    client?
+                        .get(self.base_url.join("user/")?)
+                        .send()
+                        .await?,
+                )
+                .await?
+                .json()
+                .await?;
+
+                Ok(Some(User {
+                        id: res.id,
+                        username: res.username,
+                        token: Some(password.to_string()),
+                }))
+            }
         } else {
             Ok(None)
         }
@@ -101,6 +129,7 @@ impl super::UserProvider for Gitlab {
         Ok(res.user.map(|u| User {
             id: u.id,
             username: u.username,
+            ..Default::default()
         }))
     }
 
@@ -149,15 +178,23 @@ impl super::PackageProvider for Gitlab {
                 query.append_pair("per_page", itoa::Buffer::new().format(100u16));
                 query.append_pair("pagination", "keyset");
                 query.append_pair("sort", "asc");
-                query.append_pair("sudo", itoa::Buffer::new().format(do_as.id));
+                if do_as.token.is_none() {
+                    query.append_pair("sudo", itoa::Buffer::new().format(do_as.id));
+                }
             }
             uri
         });
 
         let futures = FuturesUnordered::new();
 
+        let client = match &do_as.token {
+            None => self.client.clone(),
+            Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?
+        };
+        let client = Arc::new(client);
+
         while let Some(uri) = next_uri.take() {
-            let res = handle_error(self.client.get(uri).send().await?).await?;
+            let res = handle_error(client.get(uri).send().await?).await?;
 
             if let Some(link_header) = res.headers().get(header::LINK) {
                 let mut link_header = parse_link_header::parse_with_rel(link_header.to_str()?)?;
@@ -167,10 +204,15 @@ impl super::PackageProvider for Gitlab {
                 }
             }
 
-            let res: Vec<GitlabPackageResponse> = res.json().await?;
+            let res: Vec<GitlabPackageResponse> = res.json::<Vec<GitlabPackageResponse>>()
+                                                     .await?
+                                                     .into_iter()
+                                                     .filter(|release| release.package_type == "generic")
+                                                     .collect();
 
             for release in res {
                 let this = Arc::clone(&self);
+                let client = Arc::clone(&client);
 
                 futures.push(tokio::spawn(
                     async move {
@@ -189,7 +231,7 @@ impl super::PackageProvider for Gitlab {
                         });
 
                         let package_files: Vec<GitlabPackageFilesResponse> = handle_error(
-                            this.client
+                            client
                                 .get(format!(
                                     "{}/projects/{}/packages/{}/package_files",
                                     this.base_url,
@@ -239,10 +281,15 @@ impl super::PackageProvider for Gitlab {
         &self,
         path: &Self::CratePath,
         version: &str,
+        do_as: &User,
     ) -> anyhow::Result<cargo_metadata::Metadata> {
         let uri = self.base_url.join(&path.metadata_uri(version))?;
+        let client = match &do_as.token {
+            None => self.client.clone(),
+            Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?
+        };
 
-        Ok(handle_error(self.client.get(uri).send().await?)
+        Ok(handle_error(client.get(uri).send().await?)
             .await?
             .json()
             .await?)
@@ -315,6 +362,7 @@ pub struct GitlabPackageResponse {
     pub id: u64,
     pub name: String,
     pub version: String,
+    pub package_type: String,
     #[serde(rename = "_links")]
     pub links: GitlabPackageLinksResponse,
 }

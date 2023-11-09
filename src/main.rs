@@ -247,7 +247,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
         // fetch metadata from the provider
         let metadata = Arc::clone(&self.gitlab)
-            .fetch_metadata_for_release(path, crate_version)
+            .fetch_metadata_for_release(path, crate_version, self.user()?)
             .await?;
 
         // transform the `cargo metadata` output to the cargo index
@@ -291,7 +291,10 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
         // fetch the impersonation token for the user we'll embed
         // the `dl` string.
-        let token = self.gitlab.fetch_token_for_user(self.user()?).await?;
+        let token = match &self.user()?.token {
+            None => self.gitlab.fetch_token_for_user(self.user()?).await?,
+            Some(token) => token.clone(),
+        };
 
         // generate the config for the user, containing the download
         // url template from gitlab and the impersonation token embedded
@@ -408,7 +411,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
                     info!(
                         "Successfully authenticated for GitLab user `{}` by {}",
                         &user.username,
-                        if by_ssh_key { "SSH Key" } else { "Build Token" },
+                        if by_ssh_key { "SSH Key" } else { "Build or Personal Token" },
                     );
                     self.user = Some(Arc::new(user));
                     self.finished_auth(Auth::Accept).await
