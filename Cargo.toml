@@ -41,3 +41,7 @@ url = { version = "2.2", features = ["serde"] }
 urlencoding = "2.1"
 ustr = "0.10"
 uuid = { version = "1.1", features = ["v4"] }
+
+[profile.release]
+lto = "thin"
+strip = true
