@@ -7,11 +7,10 @@ use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{header, Certificate};
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, str::FromStr, sync::Arc};
 use time::{Duration, OffsetDateTime};
 use tracing::{info_span, instrument, Instrument};
 use url::Url;
-use std::str::FromStr;
 
 pub struct Gitlab {
     client: reqwest::Client,
@@ -22,13 +21,13 @@ pub struct Gitlab {
 
 impl Gitlab {
     pub fn new(config: &GitlabConfig) -> anyhow::Result<Self> {
-        let mut headers = header::HeaderMap::new();
-        headers.insert(
-            "PRIVATE-TOKEN",
-            header::HeaderValue::from_str(&config.admin_token)?,
-        );
+        let mut client_builder = reqwest::ClientBuilder::new();
 
-        let mut client_builder = reqwest::ClientBuilder::new().default_headers(headers);
+        if let Some(token) = &config.admin_token {
+            let mut headers = header::HeaderMap::new();
+            headers.insert("PRIVATE-TOKEN", header::HeaderValue::from_str(token)?);
+            client_builder = client_builder.default_headers(headers);
+        }
 
         let ssl_cert = match &config.ssl_cert {
             Some(cert_path) => {
@@ -286,7 +285,7 @@ impl super::PackageProvider for Gitlab {
         let uri = self.base_url.join(&path.metadata_uri(version))?;
         let client = match &do_as.token {
             None => self.client.clone(),
-            Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?
+            Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?,
         };
 
         Ok(handle_error(client.get(uri).send().await?)

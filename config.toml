@@ -13,4 +13,6 @@ uri = "http://127.0.0.1:3000"
 # users and create impersonation tokens. `sudo` is used to fetch all the
 # packages the user can access, and the impersonation token is returned
 # to the user to download packages
+#
+# May be omitted if clients are using their own personal access tokens.
 admin-token = "personal-access-token"
