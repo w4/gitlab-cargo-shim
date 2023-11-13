@@ -411,7 +411,11 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
                     info!(
                         "Successfully authenticated for GitLab user `{}` by {}",
                         &user.username,
-                        if by_ssh_key { "SSH Key" } else { "Build or Personal Token" },
+                        if by_ssh_key {
+                            "SSH Key"
+                        } else {
+                            "Build or Personal Token"
+                        },
                     );
                     self.user = Some(Arc::new(user));
                     self.finished_auth(Auth::Accept).await
