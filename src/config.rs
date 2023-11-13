@@ -82,9 +82,10 @@ impl MetadataFormat {
             Self::Json => Ok(handle_error(res).await?.json().await?),
             Self::JsonZst => {
                 let body = handle_error(res).await?.bytes().await?;
-                tokio::task::block_in_place(move || {
+                tokio::task::spawn_blocking(move || {
                     Ok(serde_json::from_reader(zstd::Decoder::new(body.as_ref())?)?)
                 })
+                .await?
             }
         }
     }
