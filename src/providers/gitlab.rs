@@ -1,7 +1,9 @@
 #![allow(clippy::module_name_repetitions)]
 
-use crate::config::GitlabConfig;
-use crate::providers::{Release, User};
+use crate::{
+    config::GitlabConfig,
+    providers::{Release, User},
+};
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -47,7 +49,11 @@ impl Gitlab {
         })
     }
 
-    pub fn build_client_with_token(&self, token_field: &str, token: &str) -> anyhow::Result<reqwest::Client> {
+    pub fn build_client_with_token(
+        &self,
+        token_field: &str,
+        token: &str,
+    ) -> anyhow::Result<reqwest::Client> {
         let mut headers = header::HeaderMap::new();
         headers.insert(
             header::HeaderName::from_str(token_field)?,
@@ -76,38 +82,37 @@ impl super::UserProvider for Gitlab {
         if username == "gitlab-ci-token" || username == "personal-token" {
             // we're purposely not using `self.client` here as we don't
             // want to use our admin token for this request but still want to use any ssl cert provided.
-            let client = self.build_client_with_token(if username == "gitlab-ci-token" { "JOB-TOKEN" } else { "PRIVATE-TOKEN" }, password);
+            let client = self.build_client_with_token(
+                if username == "gitlab-ci-token" {
+                    "JOB-TOKEN"
+                } else {
+                    "PRIVATE-TOKEN"
+                },
+                password,
+            );
             if username == "gitlab-ci-token" {
-                let res: GitlabJobResponse = handle_error(
-                    client?
-                        .get(self.base_url.join("job/")?)
-                        .send()
-                        .await?,
-                )
-                .await?
-                .json()
-                .await?;
+                let res: GitlabJobResponse =
+                    handle_error(client?.get(self.base_url.join("job/")?).send().await?)
+                        .await?
+                        .json()
+                        .await?;
 
                 Ok(Some(User {
-                        id: res.user.id,
-                        username: res.user.username,
-                        ..Default::default()
+                    id: res.user.id,
+                    username: res.user.username,
+                    ..Default::default()
                 }))
             } else {
-                let res: GitlabUserResponse = handle_error(
-                    client?
-                        .get(self.base_url.join("user/")?)
-                        .send()
-                        .await?,
-                )
-                .await?
-                .json()
-                .await?;
+                let res: GitlabUserResponse =
+                    handle_error(client?.get(self.base_url.join("user/")?).send().await?)
+                        .await?
+                        .json()
+                        .await?;
 
                 Ok(Some(User {
-                        id: res.id,
-                        username: res.username,
-                        token: Some(password.to_string()),
+                    id: res.id,
+                    username: res.username,
+                    token: Some(password.to_string()),
                 }))
             }
         } else {
@@ -188,7 +193,7 @@ impl super::PackageProvider for Gitlab {
 
         let client = match &do_as.token {
             None => self.client.clone(),
-            Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?
+            Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?,
         };
         let client = Arc::new(client);
 
@@ -203,11 +208,12 @@ impl super::PackageProvider for Gitlab {
                 }
             }
 
-            let res: Vec<GitlabPackageResponse> = res.json::<Vec<GitlabPackageResponse>>()
-                                                     .await?
-                                                     .into_iter()
-                                                     .filter(|release| release.package_type == "generic")
-                                                     .collect();
+            let res: Vec<_> = res
+                .json::<Vec<GitlabPackageResponse>>()
+                .await?
+                .into_iter()
+                .filter(|release| release.package_type == "generic")
+                .collect();
 
             for release in res {
                 let this = Arc::clone(&self);
