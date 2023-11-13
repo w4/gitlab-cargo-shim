@@ -1,7 +1,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 use crate::{
-    config::GitlabConfig,
+    config::{GitlabConfig, MetadataFormat},
     providers::{Release, User},
 };
 use async_trait::async_trait;
@@ -19,6 +19,7 @@ pub struct Gitlab {
     base_url: Url,
     token_expiry: Duration,
     ssl_cert: Option<Certificate>,
+    metadata_format: MetadataFormat,
 }
 
 impl Gitlab {
@@ -46,6 +47,7 @@ impl Gitlab {
             base_url: config.uri.join("api/v4/")?,
             token_expiry: config.token_expiry,
             ssl_cert,
+            metadata_format: config.metadata_format,
         })
     }
 
@@ -288,16 +290,17 @@ impl super::PackageProvider for Gitlab {
         version: &str,
         do_as: &User,
     ) -> anyhow::Result<cargo_metadata::Metadata> {
-        let uri = self.base_url.join(&path.metadata_uri(version))?;
+        let fmt = self.metadata_format;
+        let url = self
+            .base_url
+            .join(&path.file_uri(fmt.filename(), version))?;
+
         let client = match &do_as.token {
             None => self.client.clone(),
             Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?,
         };
 
-        Ok(handle_error(client.get(uri).send().await?)
-            .await?
-            .json()
-            .await?)
+        fmt.decode(client.get(url).send().await?).await
     }
 
     fn cargo_dl_uri(&self, project: &str, token: &str) -> anyhow::Result<String> {
@@ -309,7 +312,7 @@ impl super::PackageProvider for Gitlab {
     }
 }
 
-async fn handle_error(resp: reqwest::Response) -> Result<reqwest::Response, anyhow::Error> {
+pub async fn handle_error(resp: reqwest::Response) -> Result<reqwest::Response, anyhow::Error> {
     if resp.status().is_success() {
         Ok(resp)
     } else {
@@ -336,9 +339,9 @@ pub struct GitlabCratePath {
 
 impl GitlabCratePath {
     #[must_use]
-    pub fn metadata_uri(&self, version: &str) -> String {
+    pub fn file_uri(&self, file: &str, version: &str) -> String {
         format!(
-            "projects/{}/packages/generic/{}/{version}/metadata.json",
+            "projects/{}/packages/generic/{}/{version}/{file}",
             self.project, self.package_name
         )
     }
