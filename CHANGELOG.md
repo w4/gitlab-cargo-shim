@@ -1,4 +1,5 @@
-# Unreleased
+# v0.1.4
+
 - Add optional `metadata-format` config. Options: `json` (default) & `json.zst`.
   When the latter selected the server will fetch `metadata.json.zst` files.
 
