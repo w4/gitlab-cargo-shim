@@ -1,0 +1,78 @@
+on: [push, pull_request]
+
+name: Test
+
+jobs:
+  smoke:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    services:
+      gitlab:
+        image: gitlab/gitlab-ee:latest
+        options: --shm-size 256m
+        ports:
+          - 80:80
+          - 443:443
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start gitlab-cargo-shim
+        run: |
+          docker build . -t gitlab-cargo-shim
+          docker run --detach \
+            --name gitlab-cargo-shim \
+            --mount type=bind,source=$(pwd)/test/config.toml,target=/app/config.toml \
+            --network host \
+            gitlab-cargo-shim \
+            -c /app/config.toml
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip jq openssh-client
+          pip3 install requests beautifulsoup4 html5lib
+      - name: Wait for GitLab to boot
+        run: timeout 20m bash -c 'until curl -s http://127.0.0.1/users/sign_in | grep csrf-token; do sleep 5; done'
+      - name: Create GitLab package
+        run: |
+          export GITLAB_CONTAINER=$(docker ps --format "{{.ID}}" --no-trunc --filter "ancestor=gitlab/gitlab-ee:latest")
+          export ROOT_PASSWORD=$(docker exec $GITLAB_CONTAINER grep 'Password:' /etc/gitlab/initial_root_password | sed 's/Password: //')
+          export ROOT_PAT=$(python3 ./test/create_pat.py)
+          curl -s --request POST --header "PRIVATE-TOKEN: $ROOT_PAT" --header "Content-Type: application/json" \
+            --data '{"name": "example-lib"}' \
+            --url 'http://127.0.0.1/api/v4/projects/'
+          echo "ROOT_PAT=$ROOT_PAT" >> "$GITHUB_ENV"
+      - name: Packaging example-lib
+        run: |
+          cd test/example-lib
+          cargo package
+          cargo metadata --format-version 1 > metadata.json
+      - name: Uploading example-lib to GitLab
+        run: |
+          curl --header "PRIVATE-TOKEN: $ROOT_PAT" --upload-file test/example-lib/target/package/example-lib-0.1.0.crate http://127.0.0.1/api/v4/projects/root%2Fexample-lib/packages/generic/example-lib/0.1.0/example-lib-0.1.0.crate
+          curl --header "PRIVATE-TOKEN: $ROOT_PAT" --upload-file test/example-lib/metadata.json http://127.0.0.1/api/v4/projects/root%2Fexample-lib/packages/generic/example-lib/0.1.0/metadata.json
+      - name: Creating SSH key to identify with gitlab-cargo-shim
+        run: |
+          ssh-keygen -t ed25519 -C testkey -N '' -f ~/.ssh/id_ed25519
+      - name: Fetching public keys from gitlab-cargo-shim and storing in known_hosts
+        run: |
+          ssh-keyscan -p 2233 127.0.0.1 > ~/.ssh/known_hosts
+      - name: Write PAT to .config
+        run: |
+          echo -e "Host *\n    User personal-token:$ROOT_PAT" > ~/.ssh/config
+      - name: Building example-bin using example-lib from registry
+        run: |
+          cd test/example-bin
+          CARGO_NET_GIT_FETCH_WITH_CLI=true cargo check
+      - name: Collect docker logs on failure
+        if: failure()
+        uses: jwalton/gh-docker-logs@v2
+        with:
+          dest: './logs'
+      - name: Tar logs
+        if: failure()
+        run: tar cvzf ./logs.tgz ./logs
+      - name: Upload logs as artifacts
+        if: failure()
+        uses: actions/upload-artifact@master
+        with:
+          name: logs.tgz
+          path: ./logs.tgz
