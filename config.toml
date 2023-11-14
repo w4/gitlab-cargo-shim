@@ -1,18 +1,25 @@
-# socket address for the SSH server to listen on
+## socket address for the SSH server to listen on
 listen-address = "[::]:2222"
 
-# directory in which the generated private keys for the server
-# should be stored
+## directory in which the generated private keys for the server
+## should be stored
 state-directory = "/var/lib/gitlab-cargo-shim"
 
 [gitlab]
-# the base url of the gitlab instance
+## the base url of the gitlab instance
 uri = "http://127.0.0.1:3000"
 
-# a personal access token of an admin with permission to `sudo` as other
-# users and create impersonation tokens. `sudo` is used to fetch all the
-# packages the user can access, and the impersonation token is returned
-# to the user to download packages
-#
-# May be omitted if clients are using their own personal access tokens.
-admin-token = "personal-access-token"
+## a personal access token of an admin with permission to `sudo` as other
+## users and create impersonation tokens. `sudo` is used to fetch all the
+## packages the user can access, and the impersonation token is returned
+## to the user to download packages
+##
+## May be omitted if clients are using their own personal access tokens.
+# admin-token = "personal-access-token"
+
+## metadata format to fetch from the package registry.
+## Options: "json", "json.zst"
+##
+## The correct format must be available in the package registry for all
+## packages.
+# metadata-format = "json"

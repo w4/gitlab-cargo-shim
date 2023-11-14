@@ -1,3 +1,7 @@
+# Unreleased
+- Add optional `metadata-format` config. Options: `json` (default) & `json.zst`.
+  When the latter selected the server will fetch `metadata.json.zst` files.
+
 # v0.1.3
 
 - Add `ssl-cert` configuration value under `gitlab` to allow self-signed
