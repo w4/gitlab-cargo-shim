@@ -1,0 +1,1 @@
+This crate is built in CI to ensure example-lib can be fetched via gitlab-cargo-shim

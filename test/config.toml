@@ -1,0 +1,5 @@
+listen-address = "0.0.0.0:2233"
+state-directory = "/tmp/state"
+
+[gitlab]
+uri = "http://127.0.0.1"
