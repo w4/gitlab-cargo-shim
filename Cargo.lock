@@ -1710,9 +1710,9 @@ dependencies = [
 
 [[package]]
 name = "thrussh-libsodium"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe89c70d27b1cb92e13bc8af63493e890d0de46dae4df0e28233f62b4ed9500"
+checksum = "9984d637e65935d83281d82716e600ccb91ae49e3c2fb5932abb076030e516e4"
 dependencies = [
  "lazy_static",
  "libc",

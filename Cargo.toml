@@ -33,7 +33,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 thrussh = "0.34"
 thrussh-keys = "0.22"
-thrussh-libsodium = "=0.2.1" # 0.2.2 causes dynamic linking by enabling use-pkg-config
+thrussh-libsodium = "=0.2.2" # 0.2.2 causes dynamic linking by enabling use-pkg-config
 tokio = { version = "1.17", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 toml = "0.5"
