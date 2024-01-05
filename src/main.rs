@@ -16,7 +16,7 @@ use crate::{
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes, BytesMut};
 use clap::Parser;
-use futures::Future;
+use futures::{stream::FuturesOrdered, Future, StreamExt};
 use indexmap::IndexMap;
 use packfile::{
     codec::{Encoder, GitCodec},
@@ -39,6 +39,7 @@ use thrussh::{
     ChannelId, CryptoVec,
 };
 use thrussh_keys::key::PublicKey;
+use tokio::sync::Semaphore;
 use tokio_util::codec::{Decoder, Encoder as CodecEncoder};
 use tracing::{debug, error, info, info_span, instrument, Instrument, Span};
 use uuid::Uuid;
@@ -50,6 +51,8 @@ const AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     "\n"
 );
+/// Number of metadata GETs to do concurrently.
+const METADATA_FETCH_CONCURRENCY: usize = 6;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -222,13 +225,14 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     /// globally cache-able since it's immutable, to get to this call
     /// the user must've already fetched the crate path from the provider
     /// and hence verified they have permission to read it.
-    #[instrument(skip(self), err)]
     async fn fetch_metadata(
-        &self,
+        gitlab: &U,
+        cache: &MetadataCache,
         path: &U::CratePath,
         checksum: &str,
         crate_name: &str,
         crate_version: &str,
+        do_as: &User,
     ) -> anyhow::Result<Arc<CargoIndexCrateMetadata>> {
         let key = MetadataCacheKey {
             checksum: checksum.into(),
@@ -239,15 +243,15 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // check if the crate metadata already exists in our cache, if it does
         // we'll just return that
         {
-            let reader = self.metadata_cache.read();
+            let reader = cache.read();
             if let Some(cache) = reader.get(&key) {
                 return Ok(Arc::clone(cache));
             }
         }
 
         // fetch metadata from the provider
-        let metadata = Arc::clone(&self.gitlab)
-            .fetch_metadata_for_release(path, crate_version, self.user()?)
+        let metadata = gitlab
+            .fetch_metadata_for_release(path, crate_version, do_as)
             .await?;
 
         // transform the `cargo metadata` output to the cargo index
@@ -260,7 +264,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // cache the transformed value so the next user to pull it
         // doesn't have to wait for _yet another_ gitlab call
         {
-            let mut writer = self.metadata_cache.write();
+            let mut writer = cache.write();
             writer.insert(key.into_owned(), Arc::clone(&metadata));
         }
 
@@ -291,8 +295,9 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
 
         // fetch the impersonation token for the user we'll embed
         // the `dl` string.
-        let token = match &self.user()?.token {
-            None => self.gitlab.fetch_token_for_user(self.user()?).await?,
+        let user = self.user()?;
+        let token = match &user.token {
+            None => self.gitlab.fetch_token_for_user(user).await?,
             Some(token) => token.clone(),
         };
 
@@ -308,34 +313,58 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // fetch the releases for every project within the given project
         let releases_by_crate = self.fetch_releases_by_crate().await?;
 
-        // a reusable buffer for writing the metadata json blobs out to
-        // for each package
-        let mut buffer = BytesMut::new();
-
+        // fetch metadata concurrently
+        // parses the `cargo metadata` stored in the release, which
+        // should be stored according to MetadataFormat.
+        let fetch_concurrency = Semaphore::new(METADATA_FETCH_CONCURRENCY);
+        let mut metadata_fetches = FuturesOrdered::new();
         for ((crate_path, crate_name), releases) in &releases_by_crate {
             for release in releases {
-                let checksum = &release.checksum;
-                let version = &release.version;
+                metadata_fetches.push_back({
+                    let user = Arc::clone(user);
+                    let gitlab = &self.gitlab;
+                    let cache = &self.metadata_cache;
+                    let fetch_concurrency = &fetch_concurrency;
+                    let checksum = &release.checksum;
+                    let version = &release.version;
+                    async move {
+                        let _guard = fetch_concurrency.acquire().await?;
+                        debug!("Fetching metadata for {crate_name}-{version}");
+                        Self::fetch_metadata(
+                            gitlab, cache, crate_path, checksum, crate_name, version, &user,
+                        )
+                        .await
+                    }
+                });
+            }
+        }
 
-                debug!("Fetching metadata for {}-{}", crate_name, version);
-
-                // parses the `cargo metadata` stored in the release, which
-                // should be stored under `metadata.json`.
-                let meta = self
-                    .fetch_metadata(crate_path, checksum, crate_name, version)
-                    .await?;
-
-                // each crates file in the index is a metadata blob for
-                // each version separated by a newline
-                buffer.extend_from_slice(&serde_json::to_vec(&*meta)?);
-                buffer.put_u8(b'\n');
+        // a reusable buffer for writing the metadata json blobs out to
+        // for each package
+        let mut buffer = BytesMut::new().writer();
+        for ((_, crate_name), releases) in &releases_by_crate {
+            for release in releases {
+                match metadata_fetches
+                    .next()
+                    .await
+                    .expect("invalid metadata_fetches")
+                {
+                    Ok(meta) => {
+                        // each crates file in the index is a metadata blob for
+                        // each version separated by a newline
+                        serde_json::to_writer(&mut buffer, &*meta)?;
+                        buffer.get_mut().put_u8(b'\n');
+                    }
+                    // continue after errors, metadata files may be missing etc
+                    Err(error) => error!(%error, ?release, "fetch_metadata failed"),
+                }
             }
 
             // insert the crate version metadata into the packfile
             packfile.insert(
                 &get_crate_folder(crate_name),
                 Arc::clone(crate_name),
-                buffer.split().freeze(),
+                buffer.get_mut().split().freeze(),
             )?;
         }
 
