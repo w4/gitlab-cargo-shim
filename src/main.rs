@@ -51,8 +51,8 @@ const AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     "\n"
 );
-/// Number of metadata GETs to do concurrently.
-const METADATA_FETCH_CONCURRENCY: usize = 6;
+/// Number of metadata GETs to do in parallel.
+const PARALLEL_METADATA_FETCHES: usize = 6;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -316,7 +316,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // fetch metadata concurrently
         // parses the `cargo metadata` stored in the release, which
         // should be stored according to MetadataFormat.
-        let fetch_concurrency = Semaphore::new(METADATA_FETCH_CONCURRENCY);
+        let fetch_concurrency = Semaphore::new(PARALLEL_METADATA_FETCHES);
         let mut metadata_fetches = FuturesOrdered::new();
         for ((crate_path, crate_name), releases) in &releases_by_crate {
             for release in releases {
