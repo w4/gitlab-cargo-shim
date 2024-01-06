@@ -19,17 +19,12 @@ pub struct Gitlab {
     base_url: Url,
     token_expiry: Duration,
     metadata_format: MetadataFormat,
+    admin_token: Option<String>,
 }
 
 impl Gitlab {
     pub fn new(config: &GitlabConfig) -> anyhow::Result<Self> {
         let mut client_builder = reqwest::ClientBuilder::new();
-
-        if let Some(token) = &config.admin_token {
-            let mut headers = header::HeaderMap::new();
-            headers.insert("PRIVATE-TOKEN", header::HeaderValue::from_str(token)?);
-            client_builder = client_builder.default_headers(headers);
-        }
 
         if let Some(cert_path) = &config.ssl_cert {
             let gitlab_cert_bytes = std::fs::read(cert_path)?;
@@ -42,6 +37,7 @@ impl Gitlab {
             base_url: config.uri.join("api/v4/")?,
             token_expiry: config.token_expiry,
             metadata_format: config.metadata_format,
+            admin_token: config.admin_token.clone(),
         })
     }
 }
@@ -105,10 +101,16 @@ impl super::UserProvider for Gitlab {
         url.query_pairs_mut()
             .append_pair("fingerprint", fingerprint);
 
-        let res: GitlabSshKeyLookupResponse = handle_error(self.client.get(url).send().await?)
-            .await?
-            .json()
-            .await?;
+        let res: GitlabSshKeyLookupResponse = handle_error(
+            self.client
+                .get(url)
+                .private_token(&self.admin_token)
+                .send()
+                .await?,
+        )
+        .await?
+        .json()
+        .await?;
         Ok(res.user.map(|u| User {
             id: u.id,
             username: u.username,
@@ -124,6 +126,7 @@ impl super::UserProvider for Gitlab {
                     self.base_url
                         .join(&format!("users/{}/impersonation_tokens", user.id))?,
                 )
+                .private_token(&self.admin_token)
                 .json(&GitlabImpersonationTokenRequest {
                     name: env!("CARGO_PKG_NAME"),
                     expires_at: (OffsetDateTime::now_utc() + self.token_expiry)
@@ -171,7 +174,14 @@ impl super::PackageProvider for Gitlab {
         let futures = FuturesUnordered::new();
 
         while let Some(uri) = next_uri.take() {
-            let res = handle_error(self.client.get(uri).private_token(do_as).send().await?).await?;
+            let res = handle_error(
+                self.client
+                    .get(uri)
+                    .user_or_admin_token(do_as, &self.admin_token)
+                    .send()
+                    .await?,
+            )
+            .await?;
 
             if let Some(link_header) = res.headers().get(header::LINK) {
                 let mut link_header = parse_link_header::parse_with_rel(link_header.to_str()?)?;
@@ -216,7 +226,7 @@ impl super::PackageProvider for Gitlab {
                                     utf8_percent_encode(project, NON_ALPHANUMERIC),
                                     utf8_percent_encode(package, NON_ALPHANUMERIC),
                                 ))
-                                .private_token(&do_as)
+                                .user_or_admin_token(&do_as, &this.admin_token)
                                 .send()
                                 .await?,
                         )
@@ -267,8 +277,14 @@ impl super::PackageProvider for Gitlab {
             .base_url
             .join(&path.file_uri(fmt.filename(), version))?;
 
-        fmt.decode(self.client.get(url).private_token(do_as).send().await?)
-            .await
+        fmt.decode(
+            self.client
+                .get(url)
+                .user_or_admin_token(do_as, &self.admin_token)
+                .send()
+                .await?,
+        )
+        .await
     }
 
     fn cargo_dl_uri(&self, project: &str, token: &str) -> anyhow::Result<String> {
@@ -365,13 +381,23 @@ pub struct GitlabUserResponse {
 }
 
 trait RequestBuilderExt {
-    /// Adds `user` PRIVATE-TOKEN header if available.
-    fn private_token(self, user: &User) -> Self;
+    /// Add `user` PRIVATE-TOKEN header or admin token if available, in that order.
+    fn user_or_admin_token(self, user: &User, admin_token: &Option<String>) -> Self;
+
+    /// Add given PRIVATE-TOKEN header.
+    fn private_token(self, token: &Option<String>) -> Self;
 }
 
 impl RequestBuilderExt for reqwest::RequestBuilder {
-    fn private_token(self, user: &User) -> Self {
-        match &user.token {
+    fn user_or_admin_token(self, user: &User, admin_token: &Option<String>) -> Self {
+        match (user.token.as_deref(), admin_token.as_deref()) {
+            (Some(token), _) | (None, Some(token)) => self.header("PRIVATE-TOKEN", token),
+            _ => self,
+        }
+    }
+
+    fn private_token(self, token: &Option<String>) -> Self {
+        match token {
             Some(token) => self.header("PRIVATE-TOKEN", token),
             None => self,
         }
