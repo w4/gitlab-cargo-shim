@@ -9,7 +9,7 @@ use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{header, Certificate};
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, str::FromStr, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 use time::{Duration, OffsetDateTime};
 use tracing::{info_span, instrument, Instrument};
 use url::Url;
@@ -18,54 +18,27 @@ pub struct Gitlab {
     client: reqwest::Client,
     base_url: Url,
     token_expiry: Duration,
-    ssl_cert: Option<Certificate>,
     metadata_format: MetadataFormat,
+    admin_token: Option<String>,
 }
 
 impl Gitlab {
     pub fn new(config: &GitlabConfig) -> anyhow::Result<Self> {
         let mut client_builder = reqwest::ClientBuilder::new();
 
-        if let Some(token) = &config.admin_token {
-            let mut headers = header::HeaderMap::new();
-            headers.insert("PRIVATE-TOKEN", header::HeaderValue::from_str(token)?);
-            client_builder = client_builder.default_headers(headers);
+        if let Some(cert_path) = &config.ssl_cert {
+            let gitlab_cert_bytes = std::fs::read(cert_path)?;
+            let gitlab_cert = Certificate::from_pem(&gitlab_cert_bytes)?;
+            client_builder = client_builder.add_root_certificate(gitlab_cert);
         }
-
-        let ssl_cert = match &config.ssl_cert {
-            Some(cert_path) => {
-                let gitlab_cert_bytes = std::fs::read(cert_path)?;
-                let gitlab_cert = Certificate::from_pem(&gitlab_cert_bytes)?;
-                client_builder = client_builder.add_root_certificate(gitlab_cert.clone());
-                Some(gitlab_cert)
-            }
-            _ => None,
-        };
 
         Ok(Self {
             client: client_builder.build()?,
             base_url: config.uri.join("api/v4/")?,
             token_expiry: config.token_expiry,
-            ssl_cert,
             metadata_format: config.metadata_format,
+            admin_token: config.admin_token.clone(),
         })
-    }
-
-    pub fn build_client_with_token(
-        &self,
-        token_field: &str,
-        token: &str,
-    ) -> anyhow::Result<reqwest::Client> {
-        let mut headers = header::HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_str(token_field)?,
-            header::HeaderValue::from_str(token)?,
-        );
-        let mut client_builder = reqwest::ClientBuilder::new().default_headers(headers);
-        if let Some(cert) = &self.ssl_cert {
-            client_builder = client_builder.add_root_certificate(cert.clone());
-        }
-        Ok(client_builder.build()?)
     }
 }
 
@@ -82,22 +55,17 @@ impl super::UserProvider for Gitlab {
         };
 
         if username == "gitlab-ci-token" || username == "personal-token" {
-            // we're purposely not using `self.client` here as we don't
-            // want to use our admin token for this request but still want to use any ssl cert provided.
-            let client = self.build_client_with_token(
-                if username == "gitlab-ci-token" {
-                    "JOB-TOKEN"
-                } else {
-                    "PRIVATE-TOKEN"
-                },
-                password,
-            );
             if username == "gitlab-ci-token" {
-                let res: GitlabJobResponse =
-                    handle_error(client?.get(self.base_url.join("job/")?).send().await?)
-                        .await?
-                        .json()
-                        .await?;
+                let res: GitlabJobResponse = handle_error(
+                    self.client
+                        .get(self.base_url.join("job/")?)
+                        .header("JOB-TOKEN", password)
+                        .send()
+                        .await?,
+                )
+                .await?
+                .json()
+                .await?;
 
                 Ok(Some(User {
                     id: res.user.id,
@@ -105,11 +73,16 @@ impl super::UserProvider for Gitlab {
                     ..Default::default()
                 }))
             } else {
-                let res: GitlabUserResponse =
-                    handle_error(client?.get(self.base_url.join("user/")?).send().await?)
-                        .await?
-                        .json()
-                        .await?;
+                let res: GitlabUserResponse = handle_error(
+                    self.client
+                        .get(self.base_url.join("user/")?)
+                        .header("PRIVATE-TOKEN", password)
+                        .send()
+                        .await?,
+                )
+                .await?
+                .json()
+                .await?;
 
                 Ok(Some(User {
                     id: res.id,
@@ -128,10 +101,16 @@ impl super::UserProvider for Gitlab {
         url.query_pairs_mut()
             .append_pair("fingerprint", fingerprint);
 
-        let res: GitlabSshKeyLookupResponse = handle_error(self.client.get(url).send().await?)
-            .await?
-            .json()
-            .await?;
+        let res: GitlabSshKeyLookupResponse = handle_error(
+            self.client
+                .get(url)
+                .private_token(&self.admin_token)
+                .send()
+                .await?,
+        )
+        .await?
+        .json()
+        .await?;
         Ok(res.user.map(|u| User {
             id: u.id,
             username: u.username,
@@ -147,6 +126,7 @@ impl super::UserProvider for Gitlab {
                     self.base_url
                         .join(&format!("users/{}/impersonation_tokens", user.id))?,
                 )
+                .private_token(&self.admin_token)
                 .json(&GitlabImpersonationTokenRequest {
                     name: env!("CARGO_PKG_NAME"),
                     expires_at: (OffsetDateTime::now_utc() + self.token_expiry)
@@ -172,7 +152,7 @@ impl super::PackageProvider for Gitlab {
     async fn fetch_releases_for_project(
         self: Arc<Self>,
         project: &str,
-        do_as: &User,
+        do_as: &Arc<User>,
     ) -> anyhow::Result<Vec<(Self::CratePath, Release)>> {
         let mut next_uri = Some({
             let mut uri = self.base_url.join(&format!(
@@ -193,14 +173,15 @@ impl super::PackageProvider for Gitlab {
 
         let futures = FuturesUnordered::new();
 
-        let client = match &do_as.token {
-            None => self.client.clone(),
-            Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?,
-        };
-        let client = Arc::new(client);
-
         while let Some(uri) = next_uri.take() {
-            let res = handle_error(client.get(uri).send().await?).await?;
+            let res = handle_error(
+                self.client
+                    .get(uri)
+                    .user_or_admin_token(do_as, &self.admin_token)
+                    .send()
+                    .await?,
+            )
+            .await?;
 
             if let Some(link_header) = res.headers().get(header::LINK) {
                 let mut link_header = parse_link_header::parse_with_rel(link_header.to_str()?)?;
@@ -219,9 +200,9 @@ impl super::PackageProvider for Gitlab {
 
             for release in res {
                 let this = Arc::clone(&self);
-                let client = Arc::clone(&client);
+                let do_as = Arc::clone(do_as);
 
-                futures.push(tokio::spawn(
+                futures.push(
                     async move {
                         let (project, package) = {
                             let mut splitter = release.links.web_path.splitn(2, "/-/packages/");
@@ -238,13 +219,14 @@ impl super::PackageProvider for Gitlab {
                         });
 
                         let package_files: Vec<GitlabPackageFilesResponse> = handle_error(
-                            client
+                            this.client
                                 .get(format!(
                                     "{}/projects/{}/packages/{}/package_files",
                                     this.base_url,
                                     utf8_percent_encode(project, NON_ALPHANUMERIC),
                                     utf8_percent_encode(package, NON_ALPHANUMERIC),
                                 ))
+                                .user_or_admin_token(&do_as, &this.admin_token)
                                 .send()
                                 .await?,
                         )
@@ -272,13 +254,13 @@ impl super::PackageProvider for Gitlab {
                         )
                     }
                     .instrument(info_span!("fetch_package_files")),
-                ));
+                );
             }
         }
 
         futures
             .err_into()
-            .filter_map(|v| async move { v.and_then(|v| v).transpose() })
+            .filter_map(|v| async { v.transpose() })
             .try_collect()
             .await
     }
@@ -288,19 +270,21 @@ impl super::PackageProvider for Gitlab {
         &self,
         path: &Self::CratePath,
         version: &str,
-        do_as: &User,
+        do_as: &Arc<User>,
     ) -> anyhow::Result<cargo_metadata::Metadata> {
         let fmt = self.metadata_format;
         let url = self
             .base_url
             .join(&path.file_uri(fmt.filename(), version))?;
 
-        let client = match &do_as.token {
-            None => self.client.clone(),
-            Some(token) => self.build_client_with_token("PRIVATE-TOKEN", token)?,
-        };
-
-        fmt.decode(client.get(url).send().await?).await
+        fmt.decode(
+            self.client
+                .get(url)
+                .user_or_admin_token(do_as, &self.admin_token)
+                .send()
+                .await?,
+        )
+        .await
     }
 
     fn cargo_dl_uri(&self, project: &str, token: &str) -> anyhow::Result<String> {
@@ -394,4 +378,28 @@ pub struct GitlabSshKeyLookupResponse {
 pub struct GitlabUserResponse {
     pub id: u64,
     pub username: String,
+}
+
+trait RequestBuilderExt {
+    /// Add `user` PRIVATE-TOKEN header or admin token if available, in that order.
+    fn user_or_admin_token(self, user: &User, admin_token: &Option<String>) -> Self;
+
+    /// Add given PRIVATE-TOKEN header.
+    fn private_token(self, token: &Option<String>) -> Self;
+}
+
+impl RequestBuilderExt for reqwest::RequestBuilder {
+    fn user_or_admin_token(self, user: &User, admin_token: &Option<String>) -> Self {
+        match (user.token.as_deref(), admin_token.as_deref()) {
+            (Some(token), _) | (None, Some(token)) => self.header("PRIVATE-TOKEN", token),
+            _ => self,
+        }
+    }
+
+    fn private_token(self, token: &Option<String>) -> Self {
+        match token {
+            Some(token) => self.header("PRIVATE-TOKEN", token),
+            None => self,
+        }
+    }
 }

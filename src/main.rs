@@ -232,7 +232,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         checksum: &str,
         crate_name: &str,
         crate_version: &str,
-        do_as: &User,
+        do_as: &Arc<User>,
     ) -> anyhow::Result<Arc<CargoIndexCrateMetadata>> {
         let key = MetadataCacheKey {
             checksum: checksum.into(),
