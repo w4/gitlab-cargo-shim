@@ -12,7 +12,7 @@ import bs4
 
 BASE_URL = "http://127.0.0.1"
 SIGN_IN_URL = BASE_URL + "/users/sign_in"
-PAT_URL = BASE_URL + "/-/profile/personal_access_tokens"
+PAT_URL = BASE_URL + "/-/user_settings/personal_access_tokens"
 
 session = requests.Session()
 

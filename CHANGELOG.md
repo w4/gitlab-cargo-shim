@@ -1,3 +1,8 @@
+# Unreleased
+
+- Fetch crate metadata concurrently.
+- Handle missing invalid metadata non-fatally.
+
 # v0.1.4
 
 - Add optional `metadata-format` config. Options: `json` (default) & `json.zst`.
