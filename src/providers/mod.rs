@@ -24,14 +24,14 @@ pub trait PackageProvider {
     async fn fetch_releases_for_project(
         self: Arc<Self>,
         project: &str,
-        do_as: &User,
+        do_as: &Arc<User>,
     ) -> anyhow::Result<Vec<(Self::CratePath, Release)>>;
 
     async fn fetch_metadata_for_release(
         &self,
         path: &Self::CratePath,
         version: &str,
-        do_as: &User,
+        do_as: &Arc<User>,
     ) -> anyhow::Result<cargo_metadata::Metadata>;
 
     fn cargo_dl_uri(&self, project: &str, token: &str) -> anyhow::Result<String>;
