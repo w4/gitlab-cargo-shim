@@ -36,7 +36,7 @@ thrussh-keys = "0.22"
 thrussh-libsodium = "=0.2.1" # 0.2.2 causes dynamic linking by enabling use-pkg-config
 tokio = { version = "1.17", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
-toml = "0.5"
+toml = "0.8"
 url = { version = "2.2", features = ["serde"] }
 urlencoding = "2.1"
 ustr = "0.10"
