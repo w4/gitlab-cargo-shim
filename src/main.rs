@@ -57,8 +57,11 @@ const PARALLEL_METADATA_FETCHES: usize = 6;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env());
+    let subscriber = tracing_subscriber::fmt().with_env_filter(
+        tracing_subscriber::EnvFilter::builder()
+            .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
+            .from_env_lossy(),
+    );
     #[cfg(debug_assertions)]
     let subscriber = subscriber.pretty();
     subscriber.init();
