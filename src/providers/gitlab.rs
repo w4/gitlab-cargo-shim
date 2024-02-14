@@ -14,8 +14,12 @@ use reqwest::{header, Certificate};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
+use tokio::sync::Semaphore;
 use tracing::{debug, info_span, instrument, Instrument};
 use url::Url;
+
+/// Number of `package_files` GETs to do in parallel.
+const PARALLEL_PACKAGE_FILES_GETS: usize = 32;
 
 pub struct Gitlab {
     client: reqwest::Client,
@@ -174,6 +178,7 @@ impl super::PackageProvider for Gitlab {
             uri
         });
 
+        let fetch_concurrency = Semaphore::new(PARALLEL_PACKAGE_FILES_GETS);
         let futures = FuturesUnordered::new();
 
         while let Some(uri) = next_uri.take() {
@@ -204,9 +209,12 @@ impl super::PackageProvider for Gitlab {
             for release in res {
                 let this = Arc::clone(&self);
                 let do_as = Arc::clone(do_as);
+                let fetch_concurrency = &fetch_concurrency;
 
                 futures.push(
                     async move {
+                        let _guard = fetch_concurrency.acquire().await?;
+
                         let (project, package) = {
                             let mut splitter = release.links.web_path.splitn(2, "/-/packages/");
                             match (splitter.next(), splitter.next()) {
