@@ -33,6 +33,7 @@ use std::{
     pin::Pin,
     str::FromStr,
     sync::Arc,
+    time::Instant,
 };
 use thrussh::{
     server::{Auth, Session},
@@ -41,7 +42,7 @@ use thrussh::{
 use thrussh_keys::key::PublicKey;
 use tokio::sync::Semaphore;
 use tokio_util::codec::{Decoder, Encoder as CodecEncoder};
-use tracing::{debug, error, info, info_span, instrument, Instrument, Span};
+use tracing::{error, info, info_span, instrument, trace, Instrument, Span};
 use uuid::Uuid;
 
 const AGENT: &str = concat!(
@@ -56,7 +57,8 @@ const PARALLEL_METADATA_FETCHES: usize = 6;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let subscriber = tracing_subscriber::fmt();
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env());
     #[cfg(debug_assertions)]
     let subscriber = subscriber.pretty();
     subscriber.init();
@@ -311,13 +313,16 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         packfile.insert(&[], "config.json", config_json)?;
 
         // fetch the releases for every project within the given project
+        let a = Instant::now();
         let releases_by_crate = self.fetch_releases_by_crate().await?;
+        info!("Fetched crate releases in {:.1?}", a.elapsed());
 
         // fetch metadata concurrently
         // parses the `cargo metadata` stored in the release, which
         // should be stored according to MetadataFormat.
         let fetch_concurrency = Semaphore::new(PARALLEL_METADATA_FETCHES);
         let mut metadata_fetches = FuturesOrdered::new();
+        let a = Instant::now();
         for ((crate_path, crate_name), releases) in &releases_by_crate {
             for release in releases {
                 metadata_fetches.push_back({
@@ -329,7 +334,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
                     let version = &release.version;
                     async move {
                         let _guard = fetch_concurrency.acquire().await?;
-                        debug!("Fetching metadata for {crate_name}-{version}");
+                        trace!("Fetching metadata for {crate_name}-{version}");
                         Self::fetch_metadata(
                             gitlab, cache, crate_path, checksum, crate_name, version, &user,
                         )
@@ -367,6 +372,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
                 buffer.get_mut().split().freeze(),
             )?;
         }
+        info!("Fetched crate metadata in {:.1?}", a.elapsed());
 
         // build a commit for all of our inserted files and build
         // into its lower-level `Vec<PackFileEntry>` counter-part.
@@ -624,7 +630,7 @@ async fn capture_errors<T>(
     let res = fut.await;
 
     if let Err(e) = &res {
-        error!("Error: {}", e);
+        error!("{e}");
     }
 
     res

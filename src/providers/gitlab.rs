@@ -1,17 +1,20 @@
-#![allow(clippy::module_name_repetitions)]
+// blocks_in_conditions: didn't work with `#[instrument...`` usage
+#![allow(clippy::module_name_repetitions, clippy::blocks_in_conditions)]
 
 use crate::{
     config::{GitlabConfig, MetadataFormat},
     providers::{Release, User},
 };
+use anyhow::Context;
 use async_trait::async_trait;
+use backoff::backoff::Backoff;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{header, Certificate};
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
-use tracing::{info_span, instrument, Instrument};
+use tracing::{debug, info_span, instrument, Instrument};
 use url::Url;
 
 pub struct Gitlab {
@@ -178,7 +181,7 @@ impl super::PackageProvider for Gitlab {
                 self.client
                     .get(uri)
                     .user_or_admin_token(do_as, &self.admin_token)
-                    .send()
+                    .send_retry_429()
                     .await?,
             )
             .await?;
@@ -227,7 +230,7 @@ impl super::PackageProvider for Gitlab {
                                     utf8_percent_encode(package, NON_ALPHANUMERIC),
                                 ))
                                 .user_or_admin_token(&do_as, &this.admin_token)
-                                .send()
+                                .send_retry_429()
                                 .await?,
                         )
                         .await?
@@ -300,16 +303,17 @@ pub async fn handle_error(resp: reqwest::Response) -> Result<reqwest::Response, 
     if resp.status().is_success() {
         Ok(resp)
     } else {
-        let resp: GitlabErrorResponse = resp.json().await?;
-        Err(anyhow::Error::msg(
-            resp.message
-                .or(resp.error)
-                .map_or_else(|| Cow::Borrowed("unknown error"), Cow::Owned),
-        ))
+        let status = resp.status().as_u16();
+        let url = resp.url().clone();
+        let text = resp.text().await.unwrap_or_else(|_| "?".into());
+        let json: GitlabErrorResponse = serde_json::from_str(&text).unwrap_or_default();
+        let msg = json.message.or(json.error).unwrap_or(text);
+
+        anyhow::bail!("{url}: {status}: {msg}")
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 pub struct GitlabErrorResponse {
     message: Option<String>,
     error: Option<String>,
@@ -386,6 +390,9 @@ trait RequestBuilderExt {
 
     /// Add given PRIVATE-TOKEN header.
     fn private_token(self, token: &Option<String>) -> Self;
+
+    /// [`reqwest::RequestBuilder::send`] retrying up to 10x on 429 responses.
+    async fn send_retry_429(self) -> anyhow::Result<reqwest::Response>;
 }
 
 impl RequestBuilderExt for reqwest::RequestBuilder {
@@ -400,6 +407,25 @@ impl RequestBuilderExt for reqwest::RequestBuilder {
         match token {
             Some(token) => self.header("PRIVATE-TOKEN", token),
             None => self,
+        }
+    }
+
+    async fn send_retry_429(self) -> anyhow::Result<reqwest::Response> {
+        let mut backoff = backoff::ExponentialBackoff::default();
+        loop {
+            let r = self
+                .try_clone()
+                .context("cannot retry request")?
+                .send()
+                .await?;
+            if r.status().as_u16() == 429 {
+                if let Some(wait) = backoff.next_backoff() {
+                    debug!(url = %r.url(), "429: retrying after {wait:.1?}");
+                    tokio::time::sleep(wait).await;
+                    continue;
+                }
+            }
+            return Ok(r);
         }
     }
 }
