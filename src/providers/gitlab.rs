@@ -399,7 +399,8 @@ trait RequestBuilderExt {
     /// Add given PRIVATE-TOKEN header.
     fn private_token(self, token: &Option<String>) -> Self;
 
-    /// [`reqwest::RequestBuilder::send`] retrying up to 10x on 429 responses.
+    /// [`reqwest::RequestBuilder::send`] send and retry 429 responses
+    /// backing off exponentially between trys.
     async fn send_retry_429(self) -> anyhow::Result<reqwest::Response>;
 }
 
