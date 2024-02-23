@@ -50,5 +50,5 @@ pub type ReleaseName = Arc<str>;
 pub struct Release {
     pub name: ReleaseName,
     pub version: String,
-    pub checksum: String,
+    pub checksum: Arc<str>,
 }

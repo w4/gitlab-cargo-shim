@@ -23,3 +23,12 @@ uri = "http://127.0.0.1:3000"
 ## The correct format must be available in the package registry for all
 ## packages.
 # metadata-format = "json"
+
+## Cache file checksum fetches for all release older than this value.
+##
+## If omitted no caching will occur.
+##
+## Note: Caching shouldn't be used if published releases are expected to be mutated.
+## However, a grace period can allow the majority of crates to benefit from caching
+## but handle mutation of recently published crates.
+# cache-releases-older-than = "2 days"

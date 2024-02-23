@@ -6,6 +6,7 @@
 - Add info logs for release & metadata fetch latency.
 - When fetching all releases handle 429 by backing off.
 - Improve fetch error logging.
+- Add file checksum fetch caching controlled by `cache-releases-older-than` config.
 
 # v0.1.4
 
