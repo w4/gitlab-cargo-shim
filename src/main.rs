@@ -1,5 +1,5 @@
 #![deny(clippy::pedantic)]
-#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_errors_doc, clippy::blocks_in_conditions)]
 
 pub mod config;
 pub mod git_command_handlers;
