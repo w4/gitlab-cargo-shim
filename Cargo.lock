@@ -1061,9 +1061,9 @@ checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
 name = "packfile"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57967bd9e3ce387d7348d24c66a4570ed743d4ae9c71b0d80007322965a0434d"
+checksum = "5f1bea79fd24fc220a18ea322017593a3f6f7c01050968cff0c44c8969fa5bce"
 dependencies = [
  "bytes",
  "flate2",
