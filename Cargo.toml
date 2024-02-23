@@ -35,7 +35,7 @@ thrussh-libsodium = "=0.2.1" # 0.2.2 causes dynamic linking by enabling use-pkg-
 time = { version = "0.3", features = ["serde", "parsing"] }
 tokio = { version = "1.17", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
-toml = "0.5"
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 url = { version = "2.2", features = ["serde"] }
