@@ -3,8 +3,7 @@
 use crate::providers::gitlab::handle_error;
 use clap::Parser;
 use serde::{de::DeserializeOwned, Deserialize};
-use std::{io, net::SocketAddr, path::PathBuf, str::FromStr};
-use time::Duration;
+use std::{io, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 use url::Url;
 
 #[derive(Parser)]
@@ -36,19 +35,23 @@ pub struct GitlabConfig {
     pub uri: Url,
     /// If absent personal access tokens must be provided.
     pub admin_token: Option<String>,
+    // TODO use humantime-serde?
     #[serde(default = "GitlabConfig::default_token_expiry")]
-    pub token_expiry: Duration,
+    pub token_expiry: time::Duration,
     #[serde(default)]
     pub ssl_cert: Option<String>,
     /// Metadata format for fetching.
     #[serde(default)]
     pub metadata_format: MetadataFormat,
+    /// Cache file checksum fetches for all release older than this value.
+    #[serde(default, with = "humantime_serde")]
+    pub cache_releases_older_than: Option<Duration>,
 }
 
 impl GitlabConfig {
     #[must_use]
-    const fn default_token_expiry() -> Duration {
-        Duration::days(30)
+    const fn default_token_expiry() -> time::Duration {
+        time::Duration::days(30)
     }
 }
 
@@ -94,4 +97,33 @@ impl MetadataFormat {
 pub fn from_toml_path<T: DeserializeOwned>(path: &str) -> Result<T, std::io::Error> {
     let contents = std::fs::read(path)?;
     toml::from_slice(&contents).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+#[test]
+fn deser_config() {
+    let conf = r#"
+        listen-address = "[::]:2222"
+        state-directory = "/var/lib/gitlab-cargo-shim"
+        [gitlab]
+        uri = "http://127.0.0.1:3000"
+        metadata-format = "json.zst"
+        cache-releases-older-than = "2 days""#;
+
+    let conf: Config = toml::from_str(conf).unwrap();
+    assert_eq!(
+        conf.state_directory.to_string_lossy(),
+        "/var/lib/gitlab-cargo-shim"
+    );
+    assert_eq!(conf.listen_address.to_string(), "[::]:2222");
+
+    let gitlab = conf.gitlab;
+    assert_eq!(gitlab.uri.as_str(), "http://127.0.0.1:3000/");
+    assert_eq!(gitlab.admin_token, None);
+    assert_eq!(gitlab.token_expiry, GitlabConfig::default_token_expiry());
+    assert_eq!(gitlab.ssl_cert, None);
+    assert_eq!(gitlab.metadata_format, MetadataFormat::JsonZst);
+    assert_eq!(
+        gitlab.cache_releases_older_than,
+        Some(Duration::from_secs(2 * 24 * 60 * 60))
+    );
 }

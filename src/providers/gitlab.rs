@@ -1,5 +1,6 @@
 // blocks_in_conditions: didn't work with `#[instrument...`` usage
 #![allow(clippy::module_name_repetitions, clippy::blocks_in_conditions)]
+mod checksums;
 
 use crate::{
     config::{GitlabConfig, MetadataFormat},
@@ -8,12 +9,14 @@ use crate::{
 use anyhow::Context;
 use async_trait::async_trait;
 use backoff::backoff::Backoff;
+use checksums::ChecksumCache;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{header, Certificate};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use time::{Duration, OffsetDateTime};
+use smol_str::{format_smolstr, SmolStr};
+use std::{sync::Arc, time::Duration};
+use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 use tracing::{debug, info_span, instrument, Instrument};
 use url::Url;
@@ -24,9 +27,11 @@ const PARALLEL_PACKAGE_FILES_GETS: usize = 32;
 pub struct Gitlab {
     client: reqwest::Client,
     base_url: Url,
-    token_expiry: Duration,
+    token_expiry: time::Duration,
     metadata_format: MetadataFormat,
     admin_token: Option<String>,
+    checksums: ChecksumCache,
+    cache_checksums_older_than: Option<Duration>,
 }
 
 impl Gitlab {
@@ -45,7 +50,48 @@ impl Gitlab {
             token_expiry: config.token_expiry,
             metadata_format: config.metadata_format,
             admin_token: config.admin_token.clone(),
+            checksums: <_>::default(),
+            cache_checksums_older_than: config.cache_releases_older_than,
         })
+    }
+
+    async fn fetch_checksum(
+        &self,
+        key: checksums::Key,
+        do_as: &User,
+    ) -> anyhow::Result<Option<Arc<str>>> {
+        if let Some(chksum) = self.checksums.get(&key) {
+            return Ok(Some(chksum));
+        }
+
+        let package_files: Vec<GitlabPackageFilesResponse> = handle_error(
+            self.client
+                .get(key.fetch_url())
+                .user_or_admin_token(do_as, &self.admin_token)
+                .send_retry_429()
+                .await?,
+        )
+        .await?
+        .json()
+        .await?;
+
+        let Some(file) = package_files
+            .into_iter()
+            .find(|package_file| package_file.file_name == key.file_name)
+        else {
+            return Ok(None);
+        };
+
+        // if `cache_checksums_older_than` is configured and this file is old enough
+        // cache the checksum to avoid having to fetch again
+        if let Some(cache_older_than) = self.cache_checksums_older_than {
+            let cache_max_created = OffsetDateTime::now_utc() - cache_older_than;
+            if file.created_at < cache_max_created {
+                self.checksums.set(key, Arc::clone(&file.file_sha256));
+            }
+        }
+
+        Ok(Some(file.file_sha256))
     }
 }
 
@@ -219,7 +265,7 @@ impl super::PackageProvider for Gitlab {
                             let mut splitter = release.links.web_path.splitn(2, "/-/packages/");
                             match (splitter.next(), splitter.next()) {
                                 (Some(project), Some(package)) => (&project[1..], package),
-                                _ => return Ok(None),
+                                _ => return anyhow::Ok(None),
                             }
                         };
 
@@ -229,40 +275,29 @@ impl super::PackageProvider for Gitlab {
                                 .to_string(),
                         });
 
-                        let package_files: Vec<GitlabPackageFilesResponse> = handle_error(
-                            this.client
-                                .get(format!(
-                                    "{}/projects/{}/packages/{}/package_files",
-                                    this.base_url,
-                                    utf8_percent_encode(project, NON_ALPHANUMERIC),
-                                    utf8_percent_encode(package, NON_ALPHANUMERIC),
-                                ))
-                                .user_or_admin_token(&do_as, &this.admin_token)
-                                .send_retry_429()
-                                .await?,
-                        )
-                        .await?
-                        .json()
-                        .await?;
+                        let key = checksums::Key {
+                            base_url: this.base_url.as_str().into(),
+                            project: project.into(),
+                            package: package.into(),
+                            file_name: format_smolstr!(
+                                "{}-{}.crate",
+                                release.name,
+                                release.version
+                            ),
+                        };
 
-                        let expected_file_name =
-                            format!("{}-{}.crate", release.name, release.version);
+                        let checksum = this.fetch_checksum(key, &do_as).await?;
 
-                        Ok::<_, anyhow::Error>(
-                            package_files
-                                .into_iter()
-                                .find(|package_file| package_file.file_name == expected_file_name)
-                                .map(move |package_file| {
-                                    (
-                                        Arc::clone(&package_path),
-                                        Release {
-                                            name: Arc::from(release.name),
-                                            version: release.version,
-                                            checksum: package_file.file_sha256,
-                                        },
-                                    )
-                                }),
-                        )
+                        Ok(checksum.map(|checksum| {
+                            (
+                                Arc::clone(&package_path),
+                                Release {
+                                    name: Arc::from(release.name),
+                                    version: release.version,
+                                    checksum,
+                                },
+                            )
+                        }))
                     }
                     .instrument(info_span!("fetch_package_files")),
                 );
@@ -357,8 +392,10 @@ pub struct GitlabImpersonationTokenResponse {
 
 #[derive(Deserialize)]
 pub struct GitlabPackageFilesResponse {
-    pub file_name: String,
-    pub file_sha256: String,
+    pub file_name: SmolStr,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: time::OffsetDateTime,
+    pub file_sha256: Arc<str>,
 }
 
 #[derive(Deserialize)]
