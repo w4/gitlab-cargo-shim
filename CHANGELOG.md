@@ -2,6 +2,10 @@
 
 - Fetch crate metadata concurrently.
 - Handle missing invalid metadata non-fatally.
+- Support env var `RUST_LOG` log filter configuration.
+- Add info logs for release & metadata fetch latency.
+- When fetching all releases handle 429 by backing off.
+- Improve fetch error logging.
 
 # v0.1.4
 
