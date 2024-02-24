@@ -1,16 +1,22 @@
 #![deny(clippy::pedantic)]
-#![allow(clippy::missing_errors_doc, clippy::blocks_in_conditions)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::blocks_in_conditions,
+    clippy::module_name_repetitions
+)]
 
+pub mod cache;
 pub mod config;
 pub mod git_command_handlers;
 pub mod metadata;
 pub mod providers;
 pub mod util;
 
+use crate::cache::{Cache, ConcreteCache, Yoked};
 use crate::{
     config::Args,
     metadata::{CargoConfig, CargoIndexCrateMetadata},
-    providers::{gitlab::Gitlab, PackageProvider, Release, ReleaseName, User, UserProvider},
+    providers::{gitlab::Gitlab, PackageProvider, Release, User, UserProvider},
     util::get_crate_folder,
 };
 use anyhow::anyhow;
@@ -24,10 +30,8 @@ use packfile::{
     low_level::{HashOutput, PackFileEntry},
     PktLine,
 };
-use parking_lot::RwLock;
 use std::{
     borrow::Cow,
-    collections::HashMap,
     fmt::Write,
     net::{SocketAddr, SocketAddrV6},
     pin::Pin,
@@ -42,8 +46,9 @@ use thrussh::{
 use thrussh_keys::key::PublicKey;
 use tokio::sync::Semaphore;
 use tokio_util::codec::{Decoder, Encoder as CodecEncoder};
-use tracing::{error, info, info_span, instrument, trace, Instrument, Span};
+use tracing::{debug, error, info, info_span, instrument, trace, Instrument, Span};
 use uuid::Uuid;
+use yoke::Yoke;
 
 const AGENT: &str = concat!(
     "agent=",
@@ -108,27 +113,24 @@ async fn main() -> anyhow::Result<()> {
         ..thrussh::server::Config::default()
     });
 
-    let gitlab = Arc::new(Gitlab::new(&args.config.gitlab)?);
+    let cache = ConcreteCache::new(&args.config)?;
+
+    let gitlab = Arc::new(Gitlab::new(&args.config.gitlab, cache.clone())?);
 
     thrussh::server::run(
         thrussh_config,
         &args.config.listen_address.to_string(),
-        Server {
-            gitlab,
-            metadata_cache: MetadataCache::default(),
-        },
+        Server { gitlab, cache },
     )
     .await?;
     Ok(())
 }
 
-type MetadataCache = Arc<RwLock<HashMap<MetadataCacheKey<'static>, Arc<CargoIndexCrateMetadata>>>>;
-
 struct Server<U: UserProvider + PackageProvider + Send + Sync + 'static> {
     gitlab: Arc<U>,
     // todo: we could make our commit hash stable by leaving an update time
     //  in this cache and using that as our commit time
-    metadata_cache: MetadataCache,
+    cache: ConcreteCache,
 }
 
 impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server::Server
@@ -152,7 +154,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
             input_bytes: BytesMut::new(),
             output_bytes: BytesMut::new(),
             is_git_protocol_v2: false,
-            metadata_cache: Arc::clone(&self.metadata_cache),
+            cache: self.cache.clone(),
             span,
             packfile_cache: None,
         }
@@ -168,7 +170,7 @@ pub struct Handler<U: UserProvider + PackageProvider + Send + Sync + 'static> {
     input_bytes: BytesMut,
     output_bytes: BytesMut,
     is_git_protocol_v2: bool,
-    metadata_cache: MetadataCache,
+    cache: ConcreteCache,
     span: Span,
     // Cache of the packfile generated for this user in case it's requested
     // more than once
@@ -208,19 +210,21 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     #[allow(clippy::type_complexity)]
     async fn fetch_releases_by_crate(
         &self,
-    ) -> anyhow::Result<IndexMap<(U::CratePath, ReleaseName), Vec<Release>>> {
+    ) -> anyhow::Result<IndexMap<Arc<str>, Vec<Yoked<Release<'static>>>>> {
         let user = self.user()?;
         let project = self.project()?;
 
-        let mut res = IndexMap::new();
+        let mut res = IndexMap::<Arc<str>, Vec<Yoked<Release<'static>>>>::new();
 
-        for (path, release) in Arc::clone(&self.gitlab)
+        for release in Arc::clone(&self.gitlab)
             .fetch_releases_for_project(project, user)
             .await?
         {
-            res.entry((path, Arc::clone(&release.name)))
-                .or_insert_with(Vec::new)
-                .push(release);
+            if let Some(releases) = res.get_mut(release.get().name.as_ref()) {
+                releases.push(release);
+            } else {
+                res.insert(Arc::from(release.get().name.to_string()), vec![release]);
+            }
         }
 
         Ok(res)
@@ -232,48 +236,39 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
     /// and hence verified they have permission to read it.
     async fn fetch_metadata(
         gitlab: &U,
-        cache: &MetadataCache,
-        path: &U::CratePath,
+        cache: &ConcreteCache,
+        project: &str,
         checksum: &str,
         crate_name: &str,
         crate_version: &str,
         do_as: &Arc<User>,
-    ) -> anyhow::Result<Arc<CargoIndexCrateMetadata>> {
-        let key = MetadataCacheKey {
-            checksum: checksum.into(),
-            crate_name: crate_name.into(),
-            crate_version: crate_version.into(),
-        };
-
-        // check if the crate metadata already exists in our cache, if it does
-        // we'll just return that
+    ) -> anyhow::Result<Yoked<CargoIndexCrateMetadata<'static>>> {
+        if let Some(cache) = cache
+            .get::<CargoIndexCrateMetadata<'static>>(checksum)
+            .await?
         {
-            let reader = cache.read();
-            if let Some(cache) = reader.get(&key) {
-                return Ok(Arc::clone(cache));
-            }
+            debug!("Using metadata from cache");
+            return Ok(cache);
         }
+
+        info!("Fetching metadata from GitLab");
 
         // fetch metadata from the provider
         let metadata = gitlab
-            .fetch_metadata_for_release(path, crate_version, do_as)
+            .fetch_metadata_for_release(project, crate_name, crate_version, do_as)
             .await?;
 
         // transform the `cargo metadata` output to the cargo index
         // format
         let cksum = checksum.to_string();
         let metadata = metadata::transform(metadata, crate_name, cksum)
-            .map(Arc::new)
             .ok_or_else(|| anyhow!("the supplied metadata.json did contain the released crate"))?;
 
         // cache the transformed value so the next user to pull it
         // doesn't have to wait for _yet another_ gitlab call
-        {
-            let mut writer = cache.write();
-            writer.insert(key.into_owned(), Arc::clone(&metadata));
-        }
+        cache.put(checksum, &metadata).await?;
 
-        Ok(metadata)
+        Ok(Yoke::attach_to_cart(Vec::new(), move |_| metadata))
     }
 
     // Builds the packfile for the current connection, and caches it in case
@@ -326,20 +321,22 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         let fetch_concurrency = Semaphore::new(PARALLEL_METADATA_FETCHES);
         let mut metadata_fetches = FuturesOrdered::new();
         let a = Instant::now();
-        for ((crate_path, crate_name), releases) in &releases_by_crate {
+        for (crate_name, releases) in &releases_by_crate {
             for release in releases {
                 metadata_fetches.push_back({
                     let user = Arc::clone(user);
                     let gitlab = &self.gitlab;
-                    let cache = &self.metadata_cache;
+                    let cache = &self.cache;
                     let fetch_concurrency = &fetch_concurrency;
-                    let checksum = &release.checksum;
-                    let version = &release.version;
+                    let crate_name = crate_name.as_ref();
+                    let checksum = release.get().checksum.as_ref();
+                    let version = release.get().version.as_ref();
+                    let project = release.get().project.as_ref();
                     async move {
                         let _guard = fetch_concurrency.acquire().await?;
                         trace!("Fetching metadata for {crate_name}-{version}");
                         Self::fetch_metadata(
-                            gitlab, cache, crate_path, checksum, crate_name, version, &user,
+                            gitlab, cache, project, checksum, crate_name, version, &user,
                         )
                         .await
                     }
@@ -350,7 +347,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // a reusable buffer for writing the metadata json blobs out to
         // for each package
         let mut buffer = BytesMut::new().writer();
-        for ((_, crate_name), releases) in &releases_by_crate {
+        for (crate_name, releases) in &releases_by_crate {
             for release in releases {
                 match metadata_fetches
                     .next()
@@ -360,7 +357,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
                     Ok(meta) => {
                         // each crates file in the index is a metadata blob for
                         // each version separated by a newline
-                        serde_json::to_writer(&mut buffer, &*meta)?;
+                        serde_json::to_writer(&mut buffer, meta.get())?;
                         buffer.get_mut().put_u8(b'\n');
                     }
                     // continue after errors, metadata files may be missing etc
@@ -371,7 +368,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             // insert the crate version metadata into the packfile
             packfile.insert(
                 &get_crate_folder(crate_name),
-                Arc::clone(crate_name),
+                crate_name.to_string(),
                 buffer.get_mut().split().freeze(),
             )?;
         }
@@ -644,14 +641,4 @@ struct MetadataCacheKey<'a> {
     checksum: Cow<'a, str>,
     crate_name: Cow<'a, str>,
     crate_version: Cow<'a, str>,
-}
-
-impl MetadataCacheKey<'_> {
-    pub fn into_owned(self) -> MetadataCacheKey<'static> {
-        MetadataCacheKey {
-            checksum: self.checksum.into_owned().into(),
-            crate_name: self.crate_name.into_owned().into(),
-            crate_version: self.crate_version.into_owned().into(),
-        }
-    }
 }

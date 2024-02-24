@@ -19,6 +19,17 @@ pub struct Config {
     pub listen_address: SocketAddr,
     pub state_directory: PathBuf,
     pub gitlab: GitlabConfig,
+    #[serde(default)]
+    pub cache: CacheStore,
+}
+
+#[derive(Deserialize, Clone, Default)]
+#[serde(rename_all = "kebab-case", tag = "type")]
+pub enum CacheStore {
+    #[serde(rename = "rocksdb")]
+    RocksDb { path: PathBuf },
+    #[default]
+    InMemory,
 }
 
 impl FromStr for Config {

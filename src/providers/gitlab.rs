@@ -1,7 +1,7 @@
 // blocks_in_conditions: didn't work with `#[instrument...`` usage
 #![allow(clippy::module_name_repetitions, clippy::blocks_in_conditions)]
-mod checksums;
-
+use crate::cache::{Cache, ConcreteCache, Yoked};
+use crate::providers::EligibilityCacheKey;
 use crate::{
     config::{GitlabConfig, MetadataFormat},
     providers::{Release, User},
@@ -9,17 +9,18 @@ use crate::{
 use anyhow::Context;
 use async_trait::async_trait;
 use backoff::backoff::Backoff;
-use checksums::ChecksumCache;
 use futures::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{header, Certificate};
 use serde::{Deserialize, Serialize};
-use smol_str::{format_smolstr, SmolStr};
-use std::{sync::Arc, time::Duration};
+use smol_str::SmolStr;
+use std::borrow::Cow;
+use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::Semaphore;
-use tracing::{debug, info_span, instrument, Instrument};
+use tracing::{debug, info, info_span, instrument, Instrument};
 use url::Url;
+use yoke::Yoke;
 
 /// Number of `package_files` GETs to do in parallel.
 const PARALLEL_PACKAGE_FILES_GETS: usize = 32;
@@ -30,12 +31,11 @@ pub struct Gitlab {
     token_expiry: time::Duration,
     metadata_format: MetadataFormat,
     admin_token: Option<String>,
-    checksums: ChecksumCache,
-    cache_checksums_older_than: Option<Duration>,
+    cache: ConcreteCache,
 }
 
 impl Gitlab {
-    pub fn new(config: &GitlabConfig) -> anyhow::Result<Self> {
+    pub fn new(config: &GitlabConfig, cache: ConcreteCache) -> anyhow::Result<Self> {
         let mut client_builder = reqwest::ClientBuilder::new();
 
         if let Some(cert_path) = &config.ssl_cert {
@@ -50,23 +50,52 @@ impl Gitlab {
             token_expiry: config.token_expiry,
             metadata_format: config.metadata_format,
             admin_token: config.admin_token.clone(),
-            checksums: <_>::default(),
-            cache_checksums_older_than: config.cache_releases_older_than,
+            cache,
         })
     }
 
-    async fn fetch_checksum(
-        &self,
-        key: checksums::Key,
+    /// Checks if the given release has a `metadata.json` and matching `{release-name}-{release-version}.crate`
+    /// file, if it does then returns an `Ok(Some(Release))` result containing metadata about the
+    /// release, otherwise `Ok(None)` will be returned meaning the release isn't eligible.
+    #[instrument(skip_all, err)]
+    async fn check_release_is_eligible(
+        self: Arc<Self>,
+        release: GitlabPackageResponse,
         do_as: &User,
-    ) -> anyhow::Result<Option<Arc<str>>> {
-        if let Some(chksum) = self.checksums.get(&key) {
-            return Ok(Some(chksum));
+    ) -> anyhow::Result<Yoked<Option<Release<'static>>>> {
+        let (raw_project, package_id) = {
+            let mut splitter = release.links.web_path.splitn(2, "/-/packages/");
+            match (splitter.next(), splitter.next()) {
+                (Some(project), Some(package)) => (&project[1..], package),
+                _ => return Ok(Yoke::attach_to_cart(Vec::new(), |_| None)),
+            }
+        };
+
+        // we've already verified that the user has access to this package as this function is
+        // only ever called after its been seen from the API in `get_releases`
+        let cache_key = EligibilityCacheKey::new(raw_project, &release.name, &release.version);
+        if let Some(cached) = self
+            .cache
+            .get::<Option<Release<'static>>>(cache_key)
+            .await
+            .context("failed to lookup release cache")?
+        {
+            debug!("Returning cached eligibility for release");
+            return Ok(cached);
         }
+
+        info!("Fetching eligibility for release");
+
+        let project = utf8_percent_encode(raw_project, NON_ALPHANUMERIC);
+        let package_id = utf8_percent_encode(package_id, NON_ALPHANUMERIC);
+
+        let uri = self.base_url.join(&format!(
+            "projects/{project}/packages/{package_id}/package_files",
+        ))?;
 
         let package_files: Vec<GitlabPackageFilesResponse> = handle_error(
             self.client
-                .get(key.fetch_url())
+                .get(uri)
                 .user_or_admin_token(do_as, &self.admin_token)
                 .send_retry_429()
                 .await?,
@@ -75,23 +104,38 @@ impl Gitlab {
         .json()
         .await?;
 
-        let Some(file) = package_files
-            .into_iter()
-            .find(|package_file| package_file.file_name == key.file_name)
-        else {
-            return Ok(None);
-        };
-
-        // if `cache_checksums_older_than` is configured and this file is old enough
-        // cache the checksum to avoid having to fetch again
-        if let Some(cache_older_than) = self.cache_checksums_older_than {
-            let cache_max_created = OffsetDateTime::now_utc() - cache_older_than;
-            if file.created_at < cache_max_created {
-                self.checksums.set(key, Arc::clone(&file.file_sha256));
-            }
+        // any crate releases must contain a metadata.json
+        if !package_files
+            .iter()
+            .any(|package_file| package_file.file_name == "metadata.json")
+        {
+            return Ok(Yoke::attach_to_cart(Vec::new(), |_| None));
         }
 
-        Ok(Some(file.file_sha256))
+        let yanked = package_files
+            .iter()
+            .any(|package_file| package_file.file_name == "yanked");
+
+        let expected_file_name = format!("{}-{}.crate", release.name, release.version);
+
+        // grab the sha256 checksum of the .crate file itself
+        let release = package_files
+            .into_iter()
+            .find(|package_file| package_file.file_name == expected_file_name)
+            .map(|package_file| Release {
+                name: Cow::Owned(release.name.to_string()),
+                version: Cow::Owned(release.version.clone()),
+                checksum: Cow::Owned(package_file.file_sha256),
+                project: Cow::Owned(raw_project.to_string()),
+                yanked,
+            });
+
+        self.cache
+            .put(cache_key, &release)
+            .await
+            .context("failed to write to cache")?;
+
+        Ok(Yoke::attach_to_cart(Vec::new(), |_| release))
     }
 }
 
@@ -206,7 +250,7 @@ impl super::PackageProvider for Gitlab {
         self: Arc<Self>,
         project: &str,
         do_as: &Arc<User>,
-    ) -> anyhow::Result<Vec<(Self::CratePath, Release)>> {
+    ) -> anyhow::Result<Vec<Yoked<Release<'static>>>> {
         let mut next_uri = Some({
             let mut uri = self.base_url.join(&format!(
                 "projects/{}/packages",
@@ -260,44 +304,9 @@ impl super::PackageProvider for Gitlab {
                 futures.push(
                     async move {
                         let _guard = fetch_concurrency.acquire().await?;
-
-                        let (project, package) = {
-                            let mut splitter = release.links.web_path.splitn(2, "/-/packages/");
-                            match (splitter.next(), splitter.next()) {
-                                (Some(project), Some(package)) => (&project[1..], package),
-                                _ => return anyhow::Ok(None),
-                            }
-                        };
-
-                        let package_path = Arc::new(GitlabCratePath {
-                            project: utf8_percent_encode(project, NON_ALPHANUMERIC).to_string(),
-                            package_name: utf8_percent_encode(&release.name, NON_ALPHANUMERIC)
-                                .to_string(),
-                        });
-
-                        let key = checksums::Key {
-                            base_url: this.base_url.as_str().into(),
-                            project: project.into(),
-                            package: package.into(),
-                            file_name: format_smolstr!(
-                                "{}-{}.crate",
-                                release.name,
-                                release.version
-                            ),
-                        };
-
-                        let checksum = this.fetch_checksum(key, &do_as).await?;
-
-                        Ok(checksum.map(|checksum| {
-                            (
-                                Arc::clone(&package_path),
-                                Release {
-                                    name: Arc::from(release.name),
-                                    version: release.version,
-                                    checksum,
-                                },
-                            )
-                        }))
+                        this.clone()
+                            .check_release_is_eligible(release, &do_as)
+                            .await
                     }
                     .instrument(info_span!("fetch_package_files")),
                 );
@@ -305,8 +314,8 @@ impl super::PackageProvider for Gitlab {
         }
 
         futures
-            .err_into()
-            .filter_map(|v| async { v.transpose() })
+            .map_ok(|v| v.try_map_project(|res, _| res.ok_or(())))
+            .filter_map(|v| async move { v.map(Result::ok).transpose() })
             .try_collect()
             .await
     }
@@ -314,14 +323,19 @@ impl super::PackageProvider for Gitlab {
     #[instrument(skip(self), err)]
     async fn fetch_metadata_for_release(
         &self,
-        path: &Self::CratePath,
+        project: &str,
+        crate_name: &str,
         version: &str,
         do_as: &Arc<User>,
     ) -> anyhow::Result<cargo_metadata::Metadata> {
         let fmt = self.metadata_format;
-        let url = self
-            .base_url
-            .join(&path.file_uri(fmt.filename(), version))?;
+        let url = self.base_url.join(&format!(
+            "projects/{}/packages/generic/{}/{}/{}",
+            utf8_percent_encode(project, NON_ALPHANUMERIC),
+            utf8_percent_encode(crate_name, NON_ALPHANUMERIC),
+            utf8_percent_encode(version, NON_ALPHANUMERIC),
+            fmt.filename(),
+        ))?;
 
         fmt.decode(
             self.client
@@ -395,7 +409,7 @@ pub struct GitlabPackageFilesResponse {
     pub file_name: SmolStr,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
-    pub file_sha256: Arc<str>,
+    pub file_sha256: String,
 }
 
 #[derive(Deserialize)]

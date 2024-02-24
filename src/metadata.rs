@@ -1,10 +1,12 @@
 #![allow(clippy::module_name_repetitions)]
 
+use crate::cache::{CacheKind, Cacheable};
 use cargo_metadata::{DependencyKind, Package};
 use cargo_platform::Platform;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, collections::HashMap};
+use yoke::Yokeable;
 
 /// Transforms metadata from `cargo metadata` to the standard one-line JSON used in cargo registries.
 ///
@@ -14,14 +16,14 @@ pub fn transform(
     metadata: cargo_metadata::Metadata,
     crate_name: &str,
     cksum: String,
-) -> Option<CargoIndexCrateMetadata> {
+) -> Option<CargoIndexCrateMetadata<'static>> {
     let package: Package = metadata
         .packages
         .into_iter()
         .find(|v| v.name == crate_name)?;
 
     Some(CargoIndexCrateMetadata {
-        name: package.name,
+        name: Cow::Owned(package.name),
         vers: package.version,
         deps: package
             .dependencies
@@ -34,9 +36,9 @@ pub fn transform(
                 };
 
                 CargoIndexCrateMetadataDependency {
-                    name,
+                    name: Cow::Owned(name),
                     req: v.req,
-                    features: v.features,
+                    features: v.features.into_iter().map(Cow::Owned).collect(),
                     optional: v.optional,
                     default_features: v.uses_default_features,
                     target: v.target,
@@ -45,14 +47,18 @@ pub fn transform(
                         Cow::Borrowed("https://github.com/rust-lang/crates.io-index.git"),
                         Cow::Owned,
                     )),
-                    package,
+                    package: package.map(Cow::Owned),
                 }
             })
             .collect(),
         cksum,
-        features: package.features,
+        features: package
+            .features
+            .into_iter()
+            .map(|(k, v)| (Cow::Owned(k), v.into_iter().map(Cow::Owned).collect()))
+            .collect(),
         yanked: false,
-        links: package.links,
+        links: package.links.map(Cow::Owned),
     })
 }
 
@@ -61,26 +67,43 @@ pub struct CargoConfig {
     pub dl: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct CargoIndexCrateMetadata {
-    name: String,
+#[derive(Serialize, Deserialize, Debug, Yokeable)]
+pub struct CargoIndexCrateMetadata<'a> {
+    #[serde(borrow)]
+    name: Cow<'a, str>,
     vers: Version,
-    deps: Vec<CargoIndexCrateMetadataDependency>,
+    #[serde(borrow)]
+    deps: Vec<CargoIndexCrateMetadataDependency<'a>>,
     cksum: String,
-    features: HashMap<String, Vec<String>>,
+    #[serde(borrow)]
+    features: HashMap<Cow<'a, str>, Vec<Cow<'a, str>>>,
     yanked: bool,
-    links: Option<String>,
+    #[serde(borrow)]
+    links: Option<Cow<'a, str>>,
+}
+
+impl Cacheable for CargoIndexCrateMetadata<'static> {
+    type Key<'b> = &'b str;
+    const KIND: CacheKind = CacheKind::CrateMetadata;
+
+    fn format_key(out: &mut Vec<u8>, k: Self::Key<'_>) {
+        out.extend_from_slice(k.as_bytes());
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct CargoIndexCrateMetadataDependency {
-    name: String,
+pub struct CargoIndexCrateMetadataDependency<'a> {
+    #[serde(borrow)]
+    name: Cow<'a, str>,
     req: VersionReq,
-    features: Vec<String>,
+    #[serde(borrow)]
+    features: Vec<Cow<'a, str>>,
     optional: bool,
     default_features: bool,
     target: Option<Platform>,
     kind: DependencyKind,
-    registry: Option<Cow<'static, str>>,
-    package: Option<String>,
+    #[serde(borrow)]
+    registry: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    package: Option<Cow<'a, str>>,
 }

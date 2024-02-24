@@ -6,7 +6,9 @@
 - Add info logs for release & metadata fetch latency.
 - When fetching all releases handle 429 by backing off.
 - Improve fetch error logging.
-- Add file checksum fetch caching controlled by `cache-releases-older-than` config.
+- Added crate eligibility cache.
+- Introduce configurable cache backend with a RocksDB implementation (set `cache.type = "rocksdb"` and `cache.path = "cache"` to use it), defaults to `cache.type = "in-memory"`.
+- Support crate yanking by creating a `yanked` file on the release.
 
 # v0.1.4
 

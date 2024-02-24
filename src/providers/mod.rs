@@ -1,7 +1,12 @@
 pub mod gitlab;
 
+use crate::cache::{CacheKind, Cacheable, Yoked};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::io::Write;
 use std::sync::Arc;
+use yoke::Yokeable;
 
 #[async_trait]
 pub trait UserProvider {
@@ -25,11 +30,12 @@ pub trait PackageProvider {
         self: Arc<Self>,
         project: &str,
         do_as: &Arc<User>,
-    ) -> anyhow::Result<Vec<(Self::CratePath, Release)>>;
+    ) -> anyhow::Result<Vec<Yoked<Release<'static>>>>;
 
     async fn fetch_metadata_for_release(
         &self,
-        path: &Self::CratePath,
+        project: &str,
+        crate_name: &str,
         version: &str,
         do_as: &Arc<User>,
     ) -> anyhow::Result<cargo_metadata::Metadata>;
@@ -44,11 +50,45 @@ pub struct User {
     pub token: Option<String>,
 }
 
-pub type ReleaseName = Arc<str>;
+pub type ReleaseName<'a> = Cow<'a, str>;
 
-#[derive(Debug)]
-pub struct Release {
-    pub name: ReleaseName,
-    pub version: String,
-    pub checksum: Arc<str>,
+#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
+pub struct EligibilityCacheKey<'a> {
+    project: &'a str,
+    crate_name: &'a str,
+    crate_version: &'a str,
+}
+
+impl<'a> EligibilityCacheKey<'a> {
+    #[must_use]
+    pub fn new(project: &'a str, crate_name: &'a str, crate_version: &'a str) -> Self {
+        Self {
+            project,
+            crate_name,
+            crate_version,
+        }
+    }
+}
+
+#[derive(Debug, Yokeable, Deserialize, Serialize)]
+pub struct Release<'a> {
+    #[serde(borrow)]
+    pub name: ReleaseName<'a>,
+    #[serde(borrow)]
+    pub version: Cow<'a, str>,
+    #[serde(borrow)]
+    pub checksum: Cow<'a, str>,
+    #[serde(borrow)]
+    pub project: Cow<'a, str>,
+    pub yanked: bool,
+}
+
+impl Cacheable for Option<Release<'static>> {
+    type Key<'b> = EligibilityCacheKey<'b>;
+    const KIND: CacheKind = CacheKind::Eligibility;
+
+    fn format_key(out: &mut Vec<u8>, k: Self::Key<'_>) {
+        out.reserve(k.project.len() + k.crate_name.len() + k.crate_version.len() + 2);
+        write!(out, "{}\0{}\0{}", k.project, k.crate_name, k.crate_version).unwrap();
+    }
 }
