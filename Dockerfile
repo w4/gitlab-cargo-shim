@@ -1,6 +1,6 @@
 FROM rust:1-slim-bookworm AS builder
 
-RUN apt update && apt install -y make
+RUN apt update && apt install -y make pkg-config clang
 
 COPY . /sources
 WORKDIR /sources

@@ -585,13 +585,6 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
 
             match args.next().as_deref() {
                 Some("git-upload-pack") => {
-                    // check the executable requested to be ran is the `git-upload-pack` we
-                    // expect. we're not actually going to execute this, but we'll pretend
-                    // to be it instead in `data`.
-                    if args.next().as_deref() != Some("git-upload-pack") {
-                        anyhow::bail!("not git-upload-pack");
-                    }
-
                     // parse the requested project from the given path (the argument
                     // given to `git-upload-pack`)
                     let arg = args.next();
@@ -603,10 +596,10 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
                         self.project = Some(Arc::from(project.to_string()));
                     } else {
                         session.extended_data(channel, 1, CryptoVec::from_slice(indoc::indoc! {b"
-                    \r\nNo project was given in the path part of the SSH URI. A GitLab group and project should be defined in your .cargo/config.toml as follows:
-                        [registries]
-                        my-project = {{ index = \"ssh://domain.to.registry.com/my-group/my-project\" }}\r\n
-                "}));
+                            \r\nNo project was given in the path part of the SSH URI. A GitLab group and project should be defined in your .cargo/config.toml as follows:
+                                [registries]
+                                my-project = {{ index = \"ssh://domain.to.registry.com/my-group/my-project\" }}\r\n
+                        "}));
                         session.close(channel);
                     }
 
