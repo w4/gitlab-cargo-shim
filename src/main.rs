@@ -6,8 +6,8 @@
 )]
 
 pub mod cache;
+pub mod command;
 pub mod config;
-pub mod git_command_handlers;
 pub mod metadata;
 pub mod providers;
 pub mod util;
@@ -19,7 +19,7 @@ use crate::{
     providers::{gitlab::Gitlab, PackageProvider, Release, User, UserProvider},
     util::get_crate_folder,
 };
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use bytes::{BufMut, Bytes, BytesMut};
 use clap::Parser;
 use futures::{stream::FuturesOrdered, Future, StreamExt};
@@ -485,7 +485,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
 
                     match frame.command.as_ref() {
                         b"command=ls-refs" => {
-                            git_command_handlers::ls_refs::handle(
+                            command::git_upload_pack::ls_refs::handle(
                                 &mut self,
                                 &mut session,
                                 channel,
@@ -494,7 +494,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
                             )?;
                         }
                         b"command=fetch" => {
-                            git_command_handlers::fetch::handle(
+                            command::git_upload_pack::fetch::handle(
                                 &mut self,
                                 &mut session,
                                 channel,
@@ -583,40 +583,55 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> thrussh::server:
 
             let mut args = args.into_iter().flat_map(Vec::into_iter);
 
-            // check the executable requested to be ran is the `git-upload-pack` we
-            // expect. we're not actually going to execute this, but we'll pretend
-            // to be it instead in `data`.
-            if args.next().as_deref() != Some("git-upload-pack") {
-                anyhow::bail!("not git-upload-pack");
-            }
+            match args.next().as_deref() {
+                Some("git-upload-pack") => {
+                    // check the executable requested to be ran is the `git-upload-pack` we
+                    // expect. we're not actually going to execute this, but we'll pretend
+                    // to be it instead in `data`.
+                    if args.next().as_deref() != Some("git-upload-pack") {
+                        anyhow::bail!("not git-upload-pack");
+                    }
 
-            // parse the requested project from the given path (the argument
-            // given to `git-upload-pack`)
-            let arg = args.next();
-            if let Some(project) = arg.as_deref()
-                .filter(|v| *v != "/")
-                .map(|project| project.trim_start_matches('/').trim_end_matches('/'))
-                .filter(|project| project.contains('/'))
-            {
-                self.project = Some(Arc::from(project.to_string()));
-            } else {
-                session.extended_data(channel, 1, CryptoVec::from_slice(indoc::indoc! {b"
+                    // parse the requested project from the given path (the argument
+                    // given to `git-upload-pack`)
+                    let arg = args.next();
+                    if let Some(project) = arg.as_deref()
+                        .filter(|v| *v != "/")
+                        .map(|project| project.trim_start_matches('/').trim_end_matches('/'))
+                        .filter(|project| project.contains('/'))
+                    {
+                        self.project = Some(Arc::from(project.to_string()));
+                    } else {
+                        session.extended_data(channel, 1, CryptoVec::from_slice(indoc::indoc! {b"
                     \r\nNo project was given in the path part of the SSH URI. A GitLab group and project should be defined in your .cargo/config.toml as follows:
                         [registries]
                         my-project = {{ index = \"ssh://domain.to.registry.com/my-group/my-project\" }}\r\n
                 "}));
-                session.close(channel);
-            }
+                        session.close(channel);
+                    }
 
-            // preamble, sending our capabilities and what have you
-            self.write(PktLine::Data(b"version 2\n"))?;
-            self.write(PktLine::Data(AGENT.as_bytes()))?;
-            self.write(PktLine::Data(b"ls-refs=unborn\n"))?;
-            self.write(PktLine::Data(b"fetch=shallow wait-for-done\n"))?;
-            self.write(PktLine::Data(b"server-option\n"))?;
-            self.write(PktLine::Data(b"object-info\n"))?;
-            self.write(PktLine::Flush)?;
-            self.flush(&mut session, channel);
+                    // preamble, sending our capabilities and what have you
+                    self.write(PktLine::Data(b"version 2\n"))?;
+                    self.write(PktLine::Data(AGENT.as_bytes()))?;
+                    self.write(PktLine::Data(b"ls-refs=unborn\n"))?;
+                    self.write(PktLine::Data(b"fetch=shallow wait-for-done\n"))?;
+                    self.write(PktLine::Data(b"server-option\n"))?;
+                    self.write(PktLine::Data(b"object-info\n"))?;
+                    self.write(PktLine::Flush)?;
+                    self.flush(&mut session, channel);
+                }
+                Some("bust-cache") => {
+                    if let Err(e) = command::bust_cache::handle(&mut self, &mut session, channel, args).await {
+                        session.data(
+                            channel,
+                            CryptoVec::from(e.to_string()),
+                        );
+                        session.exit_status_request(channel, 1);
+                        session.close(channel);
+                    }
+                }
+                _ => bail!("invalid command"),
+            }
 
             Ok((self, session))
         }).instrument(span))

@@ -15,6 +15,8 @@ pub trait UserProvider {
         username_password: &str,
     ) -> anyhow::Result<Option<User>>;
 
+    async fn is_project_maintainer(&self, do_as: &User, project: &str) -> anyhow::Result<bool>;
+
     async fn find_user_by_ssh_key(&self, fingerprint: &str) -> anyhow::Result<Option<User>>;
 
     async fn fetch_token_for_user(&self, user: &User) -> anyhow::Result<String>;
@@ -39,6 +41,13 @@ pub trait PackageProvider {
         version: &str,
         do_as: &Arc<User>,
     ) -> anyhow::Result<cargo_metadata::Metadata>;
+
+    async fn bust_cache(
+        &self,
+        project: &str,
+        crate_name: &str,
+        crate_version: &str,
+    ) -> anyhow::Result<()>;
 
     fn cargo_dl_uri(&self, project: &str, token: &str) -> anyhow::Result<String>;
 }

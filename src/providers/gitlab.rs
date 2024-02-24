@@ -240,6 +240,28 @@ impl super::UserProvider for Gitlab {
 
         Ok(impersonation_token.token)
     }
+
+    /// Checks if the user is a maintainer of the given project.
+    #[instrument(skip(self), err)]
+    async fn is_project_maintainer(&self, do_as: &User, project: &str) -> anyhow::Result<bool> {
+        let uri = self.base_url.join(&format!(
+            "projects/{}",
+            utf8_percent_encode(project, NON_ALPHANUMERIC),
+        ))?;
+
+        let result: GitlabProject = handle_error(
+            self.client
+                .get(uri)
+                .user_or_admin_token(do_as, &self.admin_token)
+                .send_retry_429()
+                .await?,
+        )
+        .await?
+        .json()
+        .await?;
+
+        Ok(result.permissions.access_level() >= GitlabProjectAccess::MAINTAINER_ACCESS_LEVEL)
+    }
 }
 
 #[async_trait]
@@ -320,6 +342,23 @@ impl super::PackageProvider for Gitlab {
             .await
     }
 
+    /// Removes the given release from the cache.
+    async fn bust_cache(
+        &self,
+        project: &str,
+        crate_name: &str,
+        crate_version: &str,
+    ) -> anyhow::Result<()> {
+        self.cache
+            .remove::<Option<Release<'static>>>(EligibilityCacheKey::new(
+                project,
+                crate_name,
+                crate_version,
+            ))
+            .await?;
+        Ok(())
+    }
+
     #[instrument(skip(self), err)]
     async fn fetch_metadata_for_release(
         &self,
@@ -368,6 +407,50 @@ pub async fn handle_error(resp: reqwest::Response) -> Result<reqwest::Response, 
 
         anyhow::bail!("{url}: {status}: {msg}")
     }
+}
+
+/// The result of a `/project/[project]` call to GitLab.
+#[derive(Debug, Deserialize)]
+pub struct GitlabProject {
+    /// The user's permissions to the current project.
+    pub permissions: GitlabProjectPermissions,
+}
+
+/// The user's permissions to a project.
+#[derive(Debug, Deserialize)]
+pub struct GitlabProjectPermissions {
+    /// The access granted to this project via direct project permissions.
+    #[serde(default)]
+    pub project_access: GitlabProjectAccess,
+    /// The access granted to this project via group permissions.
+    #[serde(default)]
+    pub group_access: GitlabProjectAccess,
+}
+
+impl GitlabProjectPermissions {
+    /// Grabs the highest access the user has to the project via either direct permissions or
+    /// group permissions.
+    #[must_use]
+    pub fn access_level(&self) -> u8 {
+        std::cmp::max(
+            self.project_access.access_level,
+            self.group_access.access_level,
+        )
+    }
+}
+
+/// The user's access level to a project.
+#[derive(Debug, Deserialize, Default)]
+pub struct GitlabProjectAccess {
+    /// See <https://docs.gitlab.com/ee/api/access_requests.html#valid-access-levels>
+    access_level: u8,
+}
+
+impl GitlabProjectAccess {
+    /// Any users with access above this level are considered maintainers.
+    ///
+    /// See: <https://docs.gitlab.com/ee/api/access_requests.html#valid-access-levels>
+    pub const MAINTAINER_ACCESS_LEVEL: u8 = 40;
 }
 
 #[derive(Default, Deserialize)]
