@@ -251,7 +251,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
             return Ok(cache);
         }
 
-        info!("Fetching metadata from GitLab");
+        debug!("Fetching metadata from GitLab");
 
         // fetch metadata from the provider
         let metadata = gitlab

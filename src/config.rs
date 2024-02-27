@@ -55,8 +55,10 @@ pub struct GitlabConfig {
     #[serde(default)]
     pub metadata_format: MetadataFormat,
     /// Cache file checksum fetches for all release older than this value.
+    ///
+    /// Default zero (cache all releases).
     #[serde(default, with = "humantime_serde")]
-    pub cache_releases_older_than: Option<Duration>,
+    pub cache_releases_older_than: Duration,
 }
 
 impl GitlabConfig {
@@ -135,6 +137,6 @@ fn deser_config() {
     assert_eq!(gitlab.metadata_format, MetadataFormat::JsonZst);
     assert_eq!(
         gitlab.cache_releases_older_than,
-        Some(Duration::from_secs(2 * 24 * 60 * 60))
+        Duration::from_secs(2 * 24 * 60 * 60)
     );
 }

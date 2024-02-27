@@ -6,7 +6,7 @@
 - Add info logs for release & metadata fetch latency.
 - When fetching all releases handle 429 by backing off.
 - Improve fetch error logging.
-- Added crate eligibility cache.
+- Added crate eligibility cache. May be controlled with config `cache-releases-older-than`.
 - Introduce configurable cache backend with a RocksDB implementation (set `cache.type = "rocksdb"` and `cache.path = "cache"` to use it), defaults to `cache.type = "in-memory"`.
 - Support crate yanking by creating a `yanked` file on the release.
 - Add `bust-cache` command, invoked via `ssh [registry] -- bust-cache [project] [crate-name] [crate-version]` to remove eligibility cache (ie. after a crate has been yanked)
