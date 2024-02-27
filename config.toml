@@ -26,7 +26,7 @@ uri = "http://127.0.0.1:3000"
 
 ## Cache file checksum fetches for all release older than this value.
 ##
-## If omitted no caching will occur.
+## If omitted will cache all releases of all ages.
 ##
 ## Note: Caching shouldn't be used if published releases are expected to be mutated.
 ## However, a grace period can allow the majority of crates to benefit from caching
