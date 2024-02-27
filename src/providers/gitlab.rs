@@ -107,7 +107,7 @@ impl Gitlab {
         // any crate releases must contain a metadata.json
         if !package_files
             .iter()
-            .any(|package_file| package_file.file_name == "metadata.json")
+            .any(|package_file| package_file.file_name == self.metadata_format.filename())
         {
             return Ok(Yoke::attach_to_cart(Vec::new(), |_| None));
         }
