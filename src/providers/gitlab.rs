@@ -1,10 +1,9 @@
 // blocks_in_conditions: didn't work with `#[instrument...`` usage
 #![allow(clippy::module_name_repetitions, clippy::blocks_in_conditions)]
-use crate::cache::{Cache, ConcreteCache, Yoked};
-use crate::providers::EligibilityCacheKey;
 use crate::{
+    cache::{Cache, ConcreteCache, Yoked},
     config::{GitlabConfig, MetadataFormat},
-    providers::{Release, User},
+    providers::{EligibilityCacheKey, Release, User},
 };
 use anyhow::Context;
 use async_trait::async_trait;
@@ -14,11 +13,10 @@ use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{header, Certificate};
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
-use std::borrow::Cow;
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::sync::Semaphore;
-use tracing::{debug, info, info_span, instrument, Instrument};
+use tracing::{debug, info_span, instrument, Instrument};
 use url::Url;
 use yoke::Yoke;
 
@@ -32,6 +30,7 @@ pub struct Gitlab {
     metadata_format: MetadataFormat,
     admin_token: Option<String>,
     cache: ConcreteCache,
+    cache_checksums_older_than: Duration,
 }
 
 impl Gitlab {
@@ -51,6 +50,7 @@ impl Gitlab {
             metadata_format: config.metadata_format,
             admin_token: config.admin_token.clone(),
             cache,
+            cache_checksums_older_than: config.cache_releases_older_than,
         })
     }
 
@@ -84,7 +84,7 @@ impl Gitlab {
             return Ok(cached);
         }
 
-        info!("Fetching eligibility for release");
+        debug!("Fetching eligibility for release");
 
         let project = utf8_percent_encode(raw_project, NON_ALPHANUMERIC);
         let package_id = utf8_percent_encode(package_id, NON_ALPHANUMERIC);
@@ -119,21 +119,27 @@ impl Gitlab {
         let expected_file_name = format!("{}-{}.crate", release.name, release.version);
 
         // grab the sha256 checksum of the .crate file itself
-        let release = package_files
+        let Some(package_file) = package_files
             .into_iter()
             .find(|package_file| package_file.file_name == expected_file_name)
-            .map(|package_file| Release {
-                name: Cow::Owned(release.name.to_string()),
-                version: Cow::Owned(release.version.clone()),
-                checksum: Cow::Owned(package_file.file_sha256),
-                project: Cow::Owned(raw_project.to_string()),
-                yanked,
-            });
+        else {
+            return Ok(Yoke::attach_to_cart(Vec::new(), |_| None));
+        };
 
-        self.cache
-            .put(cache_key, &release)
-            .await
-            .context("failed to write to cache")?;
+        let release = Some(Release {
+            name: Cow::Owned(release.name.to_string()),
+            version: Cow::Owned(release.version.clone()),
+            checksum: Cow::Owned(package_file.file_sha256),
+            project: Cow::Owned(raw_project.to_string()),
+            yanked,
+        });
+
+        if package_file.created_at + self.cache_checksums_older_than < OffsetDateTime::now_utc() {
+            self.cache
+                .put(cache_key, &release)
+                .await
+                .context("failed to write to cache")?;
+        }
 
         Ok(Yoke::attach_to_cart(Vec::new(), |_| release))
     }
