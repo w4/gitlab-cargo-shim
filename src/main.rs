@@ -12,8 +12,8 @@ pub mod metadata;
 pub mod providers;
 pub mod util;
 
-use crate::cache::{Cache, ConcreteCache, Yoked};
 use crate::{
+    cache::{Cache, ConcreteCache, Yoked},
     config::Args,
     metadata::{CargoConfig, CargoIndexCrateMetadata},
     providers::{gitlab::Gitlab, PackageProvider, Release, User, UserProvider},
@@ -30,8 +30,8 @@ use packfile::{
     low_level::{HashOutput, PackFileEntry},
     PktLine,
 };
+use semver::Version;
 use std::{
-    borrow::Cow,
     fmt::Write,
     net::{SocketAddr, SocketAddrV6},
     pin::Pin,
@@ -243,15 +243,20 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         crate_version: &str,
         do_as: &Arc<User>,
     ) -> anyhow::Result<Yoked<CargoIndexCrateMetadata<'static>>> {
+        let crate_v: Option<Version> = crate_version.parse().ok();
+        let crate_v = crate_v.as_ref();
+
         if let Some(cache) = cache
             .get::<CargoIndexCrateMetadata<'static>>(checksum)
             .await?
         {
-            debug!("Using metadata from cache");
-            return Ok(cache);
+            if crate_v.is_none() || crate_v == Some(&cache.get().vers) {
+                debug!(crate_name, crate_version, "Using metadata from cache");
+                return Ok(cache);
+            }
         }
 
-        debug!("Fetching metadata from GitLab");
+        debug!(crate_name, crate_version, "Fetching metadata from GitLab");
 
         // fetch metadata from the provider
         let metadata = gitlab
@@ -261,7 +266,7 @@ impl<U: UserProvider + PackageProvider + Send + Sync + 'static> Handler<U> {
         // transform the `cargo metadata` output to the cargo index
         // format
         let cksum = checksum.to_string();
-        let metadata = metadata::transform(metadata, crate_name, cksum)
+        let metadata = metadata::transform(metadata, crate_name, crate_v, cksum)
             .ok_or_else(|| anyhow!("the supplied metadata.json did contain the released crate"))?;
 
         // cache the transformed value so the next user to pull it
@@ -642,11 +647,4 @@ async fn capture_errors<T>(
     }
 
     res
-}
-
-#[derive(Hash, Debug, PartialEq, Eq)]
-struct MetadataCacheKey<'a> {
-    checksum: Cow<'a, str>,
-    crate_name: Cow<'a, str>,
-    crate_version: Cow<'a, str>,
 }

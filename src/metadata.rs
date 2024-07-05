@@ -15,12 +15,12 @@ use yoke::Yokeable;
 pub fn transform(
     metadata: cargo_metadata::Metadata,
     crate_name: &str,
+    crate_version: Option<&Version>,
     cksum: String,
 ) -> Option<CargoIndexCrateMetadata<'static>> {
-    let package: Package = metadata
-        .packages
-        .into_iter()
-        .find(|v| v.name == crate_name)?;
+    let package: Package = metadata.packages.into_iter().find(|v| {
+        v.name == crate_name && (crate_version.is_none() || Some(&v.version) == crate_version)
+    })?;
 
     Some(CargoIndexCrateMetadata {
         name: Cow::Owned(package.name),
@@ -71,7 +71,7 @@ pub struct CargoConfig {
 pub struct CargoIndexCrateMetadata<'a> {
     #[serde(borrow)]
     name: Cow<'a, str>,
-    vers: Version,
+    pub vers: Version,
     #[serde(borrow)]
     deps: Vec<CargoIndexCrateMetadataDependency<'a>>,
     cksum: String,
