@@ -31,7 +31,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1"
 shlex = "1.1"
 smol_str = { version = "0.2.1", features = ["serde"] }
-thrussh = "0.34"
+thrussh = "=0.34.0" # 0.34.1 causes dynamic linking by enabling use-pkg-config
 thrussh-keys = "0.22"
 thrussh-libsodium = "=0.2.1" # 0.2.2 causes dynamic linking by enabling use-pkg-config
 time = { version = "0.3", features = ["serde", "parsing"] }
