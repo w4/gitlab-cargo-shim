@@ -784,7 +784,7 @@ dependencies = [
  "tempfile",
  "thrussh",
  "thrussh-keys",
- "thrussh-libsodium",
+ "thrussh-libsodium 0.3.0",
  "time",
  "tokio",
  "tokio-util",
@@ -1962,7 +1962,7 @@ dependencies = [
  "sha2 0.9.9",
  "thiserror",
  "thrussh-keys",
- "thrussh-libsodium",
+ "thrussh-libsodium 0.2.3",
  "tokio",
 ]
 
@@ -1992,7 +1992,7 @@ dependencies = [
  "serde_derive",
  "sha2 0.9.9",
  "thiserror",
- "thrussh-libsodium",
+ "thrussh-libsodium 0.2.3",
  "tokio",
  "tokio-stream",
  "yasna",
@@ -2000,9 +2000,22 @@ dependencies = [
 
 [[package]]
 name = "thrussh-libsodium"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe89c70d27b1cb92e13bc8af63493e890d0de46dae4df0e28233f62b4ed9500"
+checksum = "5f4f9c0eb4cff7225e782f7c4930c7b1f9caedf45c182e2d8602c0ec34679a1e"
+dependencies = [
+ "lazy_static",
+ "libc",
+ "libsodium-sys",
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
+name = "thrussh-libsodium"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58ed00bb88de0df6f5f4a21269a434c79ca2056bd95036ec6c6c41bfef476ea3"
 dependencies = [
  "lazy_static",
  "libc",
