@@ -108,8 +108,8 @@ impl MetadataFormat {
 }
 
 pub fn from_toml_path<T: DeserializeOwned>(path: &str) -> Result<T, std::io::Error> {
-    let contents = std::fs::read(path)?;
-    toml::from_slice(&contents).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    let contents = std::fs::read_to_string(path)?;
+    toml::from_str(&contents).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 #[test]
