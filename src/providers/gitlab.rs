@@ -1,7 +1,7 @@
 // blocks_in_conditions: didn't work with `#[instrument...`` usage
 #![allow(clippy::module_name_repetitions, clippy::blocks_in_conditions)]
 use crate::{
-    cache::{Cache, ConcreteCache, Yoked},
+    cache::{Cache, CacheKind, Cacheable, ConcreteCache, Yoked},
     config::{GitlabConfig, MetadataFormat},
     providers::{EligibilityCacheKey, Release, User},
 };
@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 use tracing::{debug, info_span, instrument, Instrument};
 use url::Url;
-use yoke::Yoke;
+use yoke::{Yoke, Yokeable};
 
 /// Number of `package_files` GETs to do in parallel.
 const PARALLEL_PACKAGE_FILES_GETS: usize = 32;
@@ -30,7 +30,7 @@ pub struct Gitlab {
     metadata_format: MetadataFormat,
     admin_token: Option<String>,
     cache: ConcreteCache,
-    cache_checksums_older_than: Duration,
+    cache_releases_older_than: Duration,
 }
 
 impl Gitlab {
@@ -50,7 +50,7 @@ impl Gitlab {
             metadata_format: config.metadata_format,
             admin_token: config.admin_token.clone(),
             cache,
-            cache_checksums_older_than: config.cache_releases_older_than,
+            cache_releases_older_than: config.cache_releases_older_than,
         })
     }
 
@@ -128,13 +128,13 @@ impl Gitlab {
 
         let release = Some(Release {
             name: Cow::Owned(release.name.to_string()),
-            version: Cow::Owned(release.version.clone()),
+            version: Cow::Owned(release.version.to_string()),
             checksum: Cow::Owned(package_file.file_sha256),
             project: Cow::Owned(raw_project.to_string()),
             yanked,
         });
 
-        if package_file.created_at + self.cache_checksums_older_than < OffsetDateTime::now_utc() {
+        if package_file.created_at + self.cache_releases_older_than < OffsetDateTime::now_utc() {
             self.cache
                 .put(cache_key, &release)
                 .await
@@ -286,9 +286,10 @@ impl super::PackageProvider for Gitlab {
             ))?;
             {
                 let mut query = uri.query_pairs_mut();
-                query.append_pair("per_page", itoa::Buffer::new().format(100u16));
+                query.append_pair("per_page", "100");
                 query.append_pair("pagination", "keyset");
                 query.append_pair("sort", "asc");
+                query.append_pair("order_by", "created_at");
                 if do_as.token.is_none() {
                     query.append_pair("sudo", itoa::Buffer::new().format(do_as.id));
                 }
@@ -300,31 +301,53 @@ impl super::PackageProvider for Gitlab {
         let futures = FuturesUnordered::new();
 
         while let Some(uri) = next_uri.take() {
-            let res = handle_error(
-                self.client
-                    .get(uri)
-                    .user_or_admin_token(do_as, &self.admin_token)
-                    .send_retry_429()
-                    .await?,
-            )
-            .await?;
+            let items = if let Some(page) = self.cache.get::<PackagePage>(uri.as_str()).await? {
+                let PackagePage { items, next } = page.get();
+                next_uri.clone_from(next);
+                items.clone()
+            } else {
+                let res = handle_error(
+                    self.client
+                        .get(uri.clone())
+                        .user_or_admin_token(do_as, &self.admin_token)
+                        .send_retry_429()
+                        .await?,
+                )
+                .await?;
 
-            if let Some(link_header) = res.headers().get(header::LINK) {
-                let mut link_header = parse_link_header::parse_with_rel(link_header.to_str()?)?;
+                let mut next = None::<Url>;
+                if let Some(link_header) = res.headers().get(header::LINK) {
+                    let mut link_header = parse_link_header::parse_with_rel(link_header.to_str()?)?;
 
-                if let Some(next) = link_header.remove("next") {
-                    next_uri = Some(next.raw_uri.parse()?);
+                    if let Some(next_link) = link_header.remove("next") {
+                        next = Some(next_link.raw_uri.parse()?);
+                    }
                 }
-            }
 
-            let res: Vec<_> = res
-                .json::<Vec<GitlabPackageResponse>>()
-                .await?
-                .into_iter()
-                .filter(|release| release.package_type == "generic")
-                .collect();
+                let items: Vec<_> = res
+                    .json::<Vec<GitlabPackageResponse>>()
+                    .await?
+                    .into_iter()
+                    .filter(|release| release.package_type == "generic")
+                    .collect();
 
-            for release in res {
+                let page = PackagePage { items, next };
+
+                // cache page if all items are older than config `cache_releases_older_than`
+                // & it is not the last page
+                if page.next.is_some()
+                    && page.items.iter().all(|item| {
+                        item.created_at + self.cache_releases_older_than < OffsetDateTime::now_utc()
+                    })
+                {
+                    self.cache.put(uri.as_str(), &page).await?;
+                }
+
+                next_uri = page.next;
+                page.items
+            };
+
+            for release in items {
                 let this = Arc::clone(&self);
                 let do_as = Arc::clone(do_as);
                 let fetch_concurrency = &fetch_concurrency;
@@ -501,17 +524,19 @@ pub struct GitlabPackageFilesResponse {
     pub file_sha256: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitlabPackageResponse {
     pub id: u64,
-    pub name: String,
-    pub version: String,
-    pub package_type: String,
+    pub name: SmolStr,
+    pub version: SmolStr,
+    pub package_type: SmolStr,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: time::OffsetDateTime,
     #[serde(rename = "_links")]
     pub links: GitlabPackageLinksResponse,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitlabPackageLinksResponse {
     web_path: String,
 }
@@ -576,5 +601,20 @@ impl RequestBuilderExt for reqwest::RequestBuilder {
             }
             return Ok(r);
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Yokeable)]
+pub struct PackagePage {
+    pub items: Vec<GitlabPackageResponse>,
+    pub next: Option<Url>,
+}
+
+impl Cacheable for PackagePage {
+    type Key<'b> = &'b str;
+    const KIND: CacheKind = CacheKind::PackagePage;
+
+    fn format_key(out: &mut Vec<u8>, k: Self::Key<'_>) {
+        out.extend_from_slice(k.as_bytes());
     }
 }
