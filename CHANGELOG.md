@@ -10,6 +10,7 @@
 - Introduce configurable cache backend with a RocksDB implementation (set `cache.type = "rocksdb"` and `cache.path = "cache"` to use it), defaults to `cache.type = "in-memory"`.
 - Support crate yanking by creating a `yanked` file on the release.
 - Add `bust-cache` command, invoked via `ssh [registry] -- bust-cache [project] [crate-name] [crate-version]` to remove eligibility cache (ie. after a crate has been yanked)
+- Update dependencies, require libsodium at build & runtime.
 
 # v0.1.4
 

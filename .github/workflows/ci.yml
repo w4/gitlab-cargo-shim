@@ -13,6 +13,7 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
+      - run: sudo apt install -y libsodium-dev
       - run: cargo check
 
   test:
@@ -25,6 +26,7 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
+      - run: sudo apt install -y libsodium-dev
       - run: cargo test
 
   fmt:
@@ -51,4 +53,5 @@ jobs:
           toolchain: stable
           override: true
           components: clippy
+      - run: sudo apt install -y libsodium-dev
       - run: cargo clippy -- -D warnings

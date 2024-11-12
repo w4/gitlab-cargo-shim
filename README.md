@@ -64,3 +64,11 @@ It's that easy. Go forth and enjoy your newfound quality of life improvements, R
 [imp-token]: https://docs.gitlab.com/ee/api/index.html#impersonation-tokens
 [envvar]: https://doc.rust-lang.org/cargo/reference/registries.html#using-an-alternate-registry
 [example-configuration]: https://github.com/w4/gitlab-cargo-shim/blob/main/config.toml
+
+## Build requirements
+* clang
+* libsodium
+* pkg-config
+
+## Runtime requirement
+* libsodium

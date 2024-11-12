@@ -11,7 +11,7 @@ async-trait = "0.1"
 backoff = "0.4"
 bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 bytes = "1.1"
-cargo_metadata = "0.15"
+cargo_metadata = "0.18"
 cargo-platform = "0.1"
 clap = { version = "4", features = ["derive", "cargo", "wrap_help"] }
 futures = "0.3"
@@ -20,29 +20,28 @@ humantime-serde = "1.1.1"
 indexmap = "2"
 indoc = "2.0"
 itoa = "1.0"
-packfile = "0.1"
+packfile = "0.1.2"
 parking_lot = "0.12"
-parse_link_header = "0.3"
+parse_link_header = "0.4"
 percent-encoding = "2.3"
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "charset"] }
 rocksdb = "0.22"
 semver = "1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1"
 shlex = "1.1"
-smol_str = { version = "0.2.1", features = ["serde"] }
-thrussh = "=0.34.0" # 0.34.1 causes dynamic linking by enabling use-pkg-config
+smol_str = { version = "0.3", features = ["serde"] }
+thrussh = "0.35.6"
 thrussh-keys = "0.22"
-thrussh-libsodium = "=0.2.1" # 0.2.2 causes dynamic linking by enabling use-pkg-config
 time = { version = "0.3", features = ["serde", "parsing"] }
 tokio = { version = "1.17", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
-toml = "0.5"
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 url = { version = "2.2", features = ["serde"] }
 urlencoding = "2.1"
-ustr = "0.10"
+ustr = "1"
 uuid = { version = "1.1", features = ["v4"] }
 yoke = { version = "0.7", features = ["derive"] }
 zstd = "0.13"
