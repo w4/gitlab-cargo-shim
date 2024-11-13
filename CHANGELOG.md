@@ -11,6 +11,7 @@
 - Support crate yanking by creating a `yanked` file on the release.
 - Add `bust-cache` command, invoked via `ssh [registry] -- bust-cache [project] [crate-name] [crate-version]` to remove eligibility cache (ie. after a crate has been yanked)
 - Update dependencies, require libsodium at build & runtime.
+- Add package page caching. Controlled with config `cache-releases-older-than`.
 
 # v0.1.4
 

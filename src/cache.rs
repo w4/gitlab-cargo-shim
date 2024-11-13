@@ -38,6 +38,7 @@ pub trait Cacheable: Serialize + Send + for<'a> Yokeable<'a> {
 pub enum CacheKind {
     Eligibility = 1,
     CrateMetadata = 2,
+    PackagePage = 3,
 }
 
 /// A generic-erased `Cache`.
