@@ -96,7 +96,7 @@ impl Gitlab {
         let package_files: Vec<GitlabPackageFilesResponse> = handle_error(
             self.client
                 .get(uri)
-                .user_or_admin_token(do_as, &self.admin_token)
+                .user_or_admin_token(do_as, self.admin_token.as_deref())
                 .send_retry_429()
                 .await?,
         )
@@ -207,7 +207,7 @@ impl super::UserProvider for Gitlab {
         let res: GitlabSshKeyLookupResponse = handle_error(
             self.client
                 .get(url)
-                .private_token(&self.admin_token)
+                .private_token(self.admin_token.as_deref())
                 .send()
                 .await?,
         )
@@ -229,7 +229,7 @@ impl super::UserProvider for Gitlab {
                     self.base_url
                         .join(&format!("users/{}/impersonation_tokens", user.id))?,
                 )
-                .private_token(&self.admin_token)
+                .private_token(self.admin_token.as_deref())
                 .json(&GitlabImpersonationTokenRequest {
                     name: env!("CARGO_PKG_NAME"),
                     expires_at: (OffsetDateTime::now_utc() + self.token_expiry)
@@ -258,7 +258,7 @@ impl super::UserProvider for Gitlab {
         let result: GitlabProject = handle_error(
             self.client
                 .get(uri)
-                .user_or_admin_token(do_as, &self.admin_token)
+                .user_or_admin_token(do_as, self.admin_token.as_deref())
                 .send_retry_429()
                 .await?,
         )
@@ -309,7 +309,7 @@ impl super::PackageProvider for Gitlab {
                 let res = handle_error(
                     self.client
                         .get(uri.clone())
-                        .user_or_admin_token(do_as, &self.admin_token)
+                        .user_or_admin_token(do_as, self.admin_token.as_deref())
                         .send_retry_429()
                         .await?,
                 )
@@ -408,7 +408,7 @@ impl super::PackageProvider for Gitlab {
         fmt.decode(
             self.client
                 .get(url)
-                .user_or_admin_token(do_as, &self.admin_token)
+                .user_or_admin_token(do_as, self.admin_token.as_deref())
                 .send()
                 .await?,
         )
@@ -559,10 +559,10 @@ pub struct GitlabUserResponse {
 
 trait RequestBuilderExt {
     /// Add `user` PRIVATE-TOKEN header or admin token if available, in that order.
-    fn user_or_admin_token(self, user: &User, admin_token: &Option<String>) -> Self;
+    fn user_or_admin_token(self, user: &User, admin_token: Option<&str>) -> Self;
 
     /// Add given PRIVATE-TOKEN header.
-    fn private_token(self, token: &Option<String>) -> Self;
+    fn private_token(self, token: Option<&str>) -> Self;
 
     /// [`reqwest::RequestBuilder::send`] send and retry 429 responses
     /// backing off exponentially between trys.
@@ -570,14 +570,14 @@ trait RequestBuilderExt {
 }
 
 impl RequestBuilderExt for reqwest::RequestBuilder {
-    fn user_or_admin_token(self, user: &User, admin_token: &Option<String>) -> Self {
-        match (user.token.as_deref(), admin_token.as_deref()) {
+    fn user_or_admin_token(self, user: &User, admin_token: Option<&str>) -> Self {
+        match (user.token.as_deref(), admin_token) {
             (Some(token), _) | (None, Some(token)) => self.header("PRIVATE-TOKEN", token),
             _ => self,
         }
     }
 
-    fn private_token(self, token: &Option<String>) -> Self {
+    fn private_token(self, token: Option<&str>) -> Self {
         match token {
             Some(token) => self.header("PRIVATE-TOKEN", token),
             None => self,

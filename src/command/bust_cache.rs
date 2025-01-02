@@ -3,8 +3,7 @@ use crate::{
     Handler,
 };
 use anyhow::{bail, Context};
-use thrussh::server::Session;
-use thrussh::{ChannelId, CryptoVec};
+use thrussh::{server::Session, ChannelId, CryptoVec};
 use tracing::instrument;
 
 #[instrument(skip_all, err)]
