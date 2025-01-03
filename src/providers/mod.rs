@@ -3,9 +3,7 @@ pub mod gitlab;
 use crate::cache::{CacheKind, Cacheable, Yoked};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use std::io::Write;
-use std::sync::Arc;
+use std::{borrow::Cow, io::Write, sync::Arc};
 use yoke::Yokeable;
 
 #[async_trait]
