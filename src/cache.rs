@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use std::{
+    collections::HashMap,
     io::{Error, ErrorKind},
     path::Path,
     sync::Arc,
@@ -138,7 +138,7 @@ impl Cache for InMemory {
         };
 
         Yoke::try_attach_to_cart(value, |v| {
-            bincode::serde::decode_borrowed_from_slice(v, BINCODE_CONFIG)
+            bincode::serde::borrow_decode_from_slice(v, BINCODE_CONFIG).map(|(data, _)| data)
         })
         .map(Some)
         .map_err(|e| Error::new(ErrorKind::Other, e))
@@ -198,7 +198,8 @@ impl Cache for RocksDb {
                 .map_err(|e| Error::new(ErrorKind::Other, e))?
                 .map(|v| {
                     Yoke::try_attach_to_cart(v, |v| {
-                        bincode::serde::decode_borrowed_from_slice(v, BINCODE_CONFIG)
+                        bincode::serde::borrow_decode_from_slice(v, BINCODE_CONFIG)
+                            .map(|(data, _)| data)
                     })
                 })
                 .transpose()
@@ -226,8 +227,10 @@ pub type Yoked<T> = Yoke<T, Vec<u8>>;
 
 #[cfg(test)]
 mod test {
-    use crate::cache::{Cache, InMemory, RocksDb};
-    use crate::providers::{EligibilityCacheKey, Release};
+    use crate::{
+        cache::{Cache, InMemory, RocksDb},
+        providers::{EligibilityCacheKey, Release},
+    };
     use std::borrow::Cow;
     use tempfile::tempdir;
 

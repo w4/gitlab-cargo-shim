@@ -9,7 +9,7 @@ anyhow = "1"
 arrayvec = "0.7"
 async-trait = "0.1"
 backoff = "0.4"
-bincode = { version = "2.0.0-rc.3", features = ["serde"] }
+bincode = { version = "2.0.1", features = ["serde"] }
 bytes = "1.1"
 cargo_metadata = "0.19"
 cargo-platform = "0.1"
